@@ -25,6 +25,9 @@ class ScaffoldTest(unittest.TestCase):
                     target.mkdir()
                     for name in ("plugin.json", "Makefile", "README.md"):
                         shutil.copy(ROOT / name, target / name)
+                    makefile = target / "Makefile"
+                    makefile.write_text(makefile.read_text().replace("PLUGIN_NAME := dictation", "PLUGIN_NAME := {{.Name}}"))
+                    self.assertIn("PLUGIN_NAME := {{.Name}}", makefile.read_text())
                     shutil.copytree(ROOT / "scripts", target / "scripts")
                 else:
                     real_run(command)
