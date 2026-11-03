@@ -7,3 +7,9 @@ __pycache__/
 .idea/
 .DS_Store
 *.wox
+
+.research/
+.test-cache/
+.*-build/
+.build/
+*.wox

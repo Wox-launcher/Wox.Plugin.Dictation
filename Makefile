@@ -1,6 +1,6 @@
 .PHONY: help init check-init check-dev-deps install reinstall clean lint format build test package dev
 
-PLUGIN_NAME := {{.Name}}
+PLUGIN_NAME := dictation
 
 DIST_DIR := dist
 SRC_DIR := src
@@ -67,15 +67,8 @@ ifeq ($(OS),Windows_NT)
 else
 	rm -rf $(DIST_DIR)
 endif
-	$(NCC) build $(SRC_DIR)/index.ts -o $(DIST_DIR)
-	$(BABEL) $(DIST_DIR) --out-dir $(DIST_DIR)
-ifeq ($(OS),Windows_NT)
-	$(POWERSHELL) "Copy-Item 'images' -Destination '$(DIST_DIR)' -Recurse"
-	$(POWERSHELL) "Copy-Item 'plugin.json' -Destination '$(DIST_DIR)'"
-else
-	cp -r images $(DIST_DIR)
-	cp plugin.json $(DIST_DIR)
-endif
+	node scripts/build.cjs
+
 
 test: check-init check-dev-deps
 	$(JEST)

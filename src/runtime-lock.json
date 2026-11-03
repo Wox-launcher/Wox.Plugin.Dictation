@@ -1,0 +1,37 @@
+{
+  "sherpa-onnx-node": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-node/-/sherpa-onnx-node-2.0.1.tgz",
+    "integrity": "sha512-1PSACfQgPXAD7ExwCv1QW09EXTjcNlpZKBqDY+jxSdIzlyOSq0M13SILBoUQUfeJqiTTXnqp6Ha9jjMUQ6efXg=="
+  },
+  "node-cpal": {
+    "version": "1.0.0",
+    "url": "https://registry.npmjs.org/node-cpal/-/node-cpal-1.0.0.tgz",
+    "integrity": "sha512-d71jIzKDjw1HepqaJQMPd+/k3ZLqYZWhLAv6a8aafIGnYoA1QWlShA5iB5CgijIJtQxq9PdQAk99JQKspqlnTA=="
+  },
+  "sherpa-onnx-win-x64": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-win-x64/-/sherpa-onnx-win-x64-2.0.1.tgz",
+    "integrity": "sha512-7vwdAw9PGEb0JLSpK7UFxAdp1vabBHK9Nhw2jFRBWSFgtslUPHIB0T6syJfRgiUGyCeNW9fJvcFAk2F2u7hBEw=="
+  },
+  "sherpa-onnx-darwin-x64": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-darwin-x64/-/sherpa-onnx-darwin-x64-2.0.1.tgz",
+    "integrity": "sha512-SBnHa3LDOSI/5/rpBHGxKQDFq+yIdxowYY0InLzfojTUx+yGgqu7cYBrRxjzvHOiOKi0O4rmlFVZboyhIqpDgA=="
+  },
+  "sherpa-onnx-darwin-arm64": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-darwin-arm64/-/sherpa-onnx-darwin-arm64-2.0.1.tgz",
+    "integrity": "sha512-agXmbbwiVPUSMViMhWhYAt59iG21ui7x6HxQFU35XzHOfQe9x6Pg9V160Pzak/66x0ePMjixsLUtMaaUrLfCwQ=="
+  },
+  "sherpa-onnx-linux-x64": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-linux-x64/-/sherpa-onnx-linux-x64-2.0.1.tgz",
+    "integrity": "sha512-w5mRRrIvPvcNWac7rQ8AN/t/cwElPGoRpH+ceCRBV7XfjCIQ9Rcr3Ig/kXcJLNOxgK4bGmef+Y47lIWiesDODw=="
+  },
+  "sherpa-onnx-linux-arm64": {
+    "version": "2.0.1",
+    "url": "https://registry.npmjs.org/sherpa-onnx-linux-arm64/-/sherpa-onnx-linux-arm64-2.0.1.tgz",
+    "integrity": "sha512-5CJvLjFYIg23oELCsT7l07fMLT3PdquZ3tqh7KZK3Pzi+c2YiPKRe1DDUxoNdtCaw3ZiS4aQSQPBblB9JStuDA=="
+  }
+}
