@@ -21,6 +21,7 @@ function setupStore() {
       return { Success: true }
     }),
     Notify: jest.fn(async () => {}),
+    ShowToastMsg: jest.fn(async () => ({ Success: true, ErrMsg: "" })),
     GetTranslation: jest.fn(async (_ctx, key: string) => key),
     Log: jest.fn(async () => {}),
     InvokePluginTool: jest.fn(async () => ({ Output: { status: "playing" } })),
@@ -171,6 +172,66 @@ function setupController() {
 }
 
 describe("session lifecycle", () => {
+  test("no speech closes the recording window and shows a toast", async () => {
+    const { controller, engine, view, store, api } = setupController()
+    jest.mocked(engine.stop).mockResolvedValue("")
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    await controller.stop()
+    expect(view.close).toHaveBeenCalledTimes(1)
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: "No speech detected" })
+    expect(jest.mocked(view.close).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(api.ShowToastMsg).mock.invocationCallOrder[0])
+    expect(engine.dispose).not.toHaveBeenCalled()
+    expect(store.history).toEqual([])
+    expect(controller.state).toBe("idle")
+  })
+  test("a toast failure does not dispose the recognition engine", async () => {
+    const { controller, engine, api } = setupController()
+    jest.mocked(engine.stop).mockResolvedValue("")
+    jest.mocked(api.ShowToastMsg).mockResolvedValue({ Success: false, ErrMsg: "toast unavailable" })
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    await controller.stop()
+    expect(engine.dispose).not.toHaveBeenCalled()
+    expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("toast unavailable"))
+    expect(controller.state).toBe("idle")
+  })
+  test("a late waveform update failure after cancellation does not notify or dispose the engine", async () => {
+    const { controller, engine, view, api } = setupController()
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    let rejectUpdate!: (error: Error) => void
+    jest.mocked(view.update).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectUpdate = reject }))
+    engine.onEvent({ event: "level", data: 0.5 })
+    await view.onCommand("cancel")
+    rejectUpdate(new Error("window closed"))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(engine.cancel).toHaveBeenCalledTimes(1)
+    expect(engine.dispose).not.toHaveBeenCalled()
+    expect(api.Notify).not.toHaveBeenCalled()
+    expect(controller.state).toBe("idle")
+  })
+  test("a stale waveform failure cannot cancel a new recording", async () => {
+    const { controller, engine, view, api } = setupController()
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    let rejectUpdate!: (error: Error) => void
+    jest.mocked(view.update).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectUpdate = reject }))
+    engine.onEvent({ event: "level", data: 0.5 })
+    await view.onCommand("cancel")
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    rejectUpdate(new Error("window closed"))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(engine.dispose).not.toHaveBeenCalled()
+    expect(api.Notify).not.toHaveBeenCalled()
+    expect(controller.state).toBe("recording")
+    await controller.cancel()
+  })
+  test("a waveform update failure in an active recording is still reported", async () => {
+    const { controller, engine, view, api } = setupController()
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    jest.mocked(view.update).mockRejectedValueOnce(new Error("window update failed"))
+    engine.onEvent({ event: "level", data: 0.5 })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(engine.dispose).toHaveBeenCalledWith("controller failure state=recording")
+    expect(api.Notify).toHaveBeenCalledWith(ctx, "Error: window update failed")
+  })
   test("cancelling from the window restores the original app after closing it", async () => {
     const restore = jest.spyOn(TextInsert.prototype, "restoreFocus").mockResolvedValue()
     const { controller, view } = setupController()

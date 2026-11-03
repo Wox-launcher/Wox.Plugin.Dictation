@@ -54,8 +54,12 @@ export class Controller {
       if (event.event === "limit") void this.stop().catch(error => this.fail(error))
       if (event.event === "error" && this.operation && !this.operation.signal.aborted) void this.fail(event.data)
       if (event.event === "partial" && this.state === "recording") this.text = String(event.data)
-      if ((event.event === "level" || event.event === "partial") && this.state === "recording")
-        void view.update({ status: "Listening…", text: this.text, recording: true, busy: true, ...(event.event === "level" ? { level: Number(event.data) } : {}) }).catch(error => this.fail(error))
+      if ((event.event === "level" || event.event === "partial") && this.state === "recording") {
+        const operation = this.operation
+        void view.update({ status: "Listening…", text: this.text, recording: true, busy: true, ...(event.event === "level" ? { level: Number(event.data) } : {}) }).catch(async error => {
+          if (operation && this.operation === operation && !operation.signal.aborted && this.state === "recording") await this.fail(error)
+        })
+      }
     }
   }
 
@@ -182,7 +186,10 @@ export class Controller {
         this.operation = undefined
         this.hotkeyActivation = ""
         void this.engine.feedback("stop").catch(() => {})
-        await this.view.update({ status: "No speech detected" })
+        await this.view.close()
+        await this.api.ShowToastMsg(this.ctx, { Message: "No speech detected" }).then(result => {
+          if (!result.Success) throw new Error(result.ErrMsg || "Could not show toast")
+        }).catch(error => this.api.Log(this.ctx, "Warning", `Could not show dictation toast: ${String(error)}`).catch(() => {}))
         return
       }
       let text = original
