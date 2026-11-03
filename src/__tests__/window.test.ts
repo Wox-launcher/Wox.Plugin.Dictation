@@ -8,6 +8,7 @@ function setup() {
   const window = {
     ID: "window-1",
     Show: jest.fn(async () => ({ Success: true })),
+    Hide: jest.fn(async () => ({ Success: true })),
     Close: jest.fn(async () => ({ Success: true })),
     SetOptions: jest.fn(async () => ({ Success: true })),
     Content: { PostMessage: jest.fn(async () => ({ Success: true })) }
@@ -32,7 +33,7 @@ test("coalesces pre-ready state and reuses one HTML document", async () => {
   expect(window.Content.PostMessage).toHaveBeenLastCalledWith(ctx, { Data: { status: "99" } })
   await view.show()
   expect(api.CreateWindow).toHaveBeenCalledTimes(1)
-  expect(window.Show).toHaveBeenCalledWith(ctx, { Activate: false })
+  expect(window.Show).toHaveBeenCalledWith(ctx, { Activate: true })
   await view.update({ status: "Preparing", busy: true })
   await view.update({ status: "Listening", recording: true })
   await view.update({ status: "AI refining", busy: true })
@@ -102,8 +103,9 @@ test("HTML messages render untrusted text as text and buttons send structured ev
   let receive!: (state: unknown) => void
   const html = option().Content.Data
   const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+  let keydown!: (event: { key: string }) => void
   runInNewContext(script, {
-    document: { getElementById: (id: string) => (nodes[id] ||= { setAttribute: () => {} }), querySelectorAll: () => bars, body: { classList: { toggle: () => {} } }, addEventListener: () => {} },
+    document: { getElementById: (id: string) => (nodes[id] ||= { setAttribute: () => {} }), querySelectorAll: () => bars, body: { classList: { toggle: () => {} } }, addEventListener: (_event: string, handler: typeof keydown) => { keydown = handler } },
     woxWindow: {
       onMessage: (callback: typeof receive) => {
         receive = callback
@@ -120,6 +122,8 @@ test("HTML messages render untrusted text as text and buttons send structured ev
   ;(nodes.wave.onclick as () => void)()
   ;(nodes.copy.onclick as () => void)()
   expect(messages).toEqual([{ command: "stop" }, { command: "copy" }])
+  keydown({ key: "Escape" })
+  expect(messages).toContainEqual({ command: "cancel" })
   receive({ status: "AI refining", busy: true })
   expect(nodes.spinner.hidden).toBe(false)
   expect(nodes.wave.hidden).toBe(true)

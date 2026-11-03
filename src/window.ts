@@ -32,8 +32,14 @@ export class DictationWindow {
       })
       await this.creating
     }
-    const result = await this.window!.Show(this.ctx, { Activate: false })
+    const result = await this.window!.Show(this.ctx, { Activate: true })
     if (!result.Success) throw new Error(result.ErrMsg || "Cannot show Dictation window")
+  }
+
+  async hide(): Promise<void> {
+    if (!this.window) return
+    const result = await this.window.Hide(this.ctx, {})
+    if (!result.Success) throw new Error(result.ErrMsg || "Cannot hide Dictation window")
   }
 
   private async create(): Promise<void> {

@@ -55,13 +55,13 @@ function historyResult(ctx: Context, item: History): Result {
     ]
   }
 }
-function actionResult(ctx: Context, action: Action, selection = ""): Result {
+function actionResult(ctx: Context, action: Action, selection = "", targetPid?: number): Result {
   return {
     Title: `Start ${action.name}`,
     SubTitle: action.output === "input" ? "Offline recognition" : `Offline recognition • ${action.output}`,
     Icon: icon,
     IdentityKey: selection ? undefined : `action:${action.id}`,
-    Actions: [{ Name: "Start dictation", ContextData: selection ? {} : { actionId: action.id }, Action: guarded(ctx, () => controller.start(action, selection)) }]
+    Actions: [{ Name: "Start dictation", ContextData: selection ? {} : { actionId: action.id }, Action: guarded(ctx, () => controller.start(action, selection, "", targetPid, true)) }]
   }
 }
 function row(ctx: Context, title: string, subtitle: string, work: () => Promise<void>): Result {
@@ -214,7 +214,7 @@ export const plugin: Plugin = {
     visibleModel = undefined
     if (query.Type === "selection") {
       if (query.Selection?.Type !== "text" || !query.Selection.Text?.trim()) return { Results: [] }
-      return { Results: store.actions.filter(a => !a.disabled).map(a => actionResult(ctx, a, query.Selection.Text)) }
+      return { Results: store.actions.filter(a => !a.disabled).map(a => actionResult(ctx, a, query.Selection.Text, query.Env?.ActiveWindowPid)) }
     }
     const search = [query.Command, query.Search].filter(Boolean).join(" ").trim()
     if (search === "model") {

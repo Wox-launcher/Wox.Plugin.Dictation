@@ -1,50 +1,54 @@
-/* global ObjC, $, Ref */
+/* global ObjC, $ */
 ObjC.import('Cocoa')
 ObjC.import('ApplicationServices')
 ObjC.bindFunction('AXIsProcessTrusted', ['bool', []])
-ObjC.bindFunction('AXUIElementCreateApplication', ['id', ['int']])
-ObjC.bindFunction('AXUIElementCopyAttributeValue', ['int', ['id', 'id', 'id *']])
-ObjC.bindFunction('CFEqual', ['bool', ['id', 'id']])
-ObjC.bindFunction('CGEventCreateKeyboardEvent', ['id', ['id', 'unsigned short', 'bool']])
-ObjC.bindFunction('CGEventKeyboardSetUnicodeString', ['void', ['id', 'unsigned long', 'void *']])
-ObjC.bindFunction('CGEventPost', ['void', ['unsigned int', 'id']])
-ObjC.bindFunction('CFRelease', ['void', ['id']])
+ObjC.bindFunction('CGPreflightPostEventAccess', ['bool', []])
+ObjC.bindFunction('CGEventCreateKeyboardEvent', ['void *', ['void *', 'unsigned short', 'bool']])
+ObjC.bindFunction('CGEventGetType', ['unsigned int', ['void *']])
+ObjC.bindFunction('CGEventSetFlags', ['void', ['void *', 'unsigned long long']])
+ObjC.bindFunction('CGEventGetFlags', ['unsigned long long', ['void *']])
+ObjC.bindFunction('CGEventPost', ['void', ['unsigned int', 'void *']])
+ObjC.bindFunction('CFRelease', ['void', ['void *']])
 
-// osascript calls this entry point.
+// osascript calls this entry point. The clipboard is prepared by the plugin.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function run(args) {
   const pid = Number(args[0])
-  if (!$.AXIsProcessTrusted() || !pid || Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) !== pid) throw new Error('Input target is unavailable')
-  const app = $.AXUIElementCreateApplication(pid)
-  const attribute = (object, name) => {
-    const ref = Ref()
-    if ($.AXUIElementCopyAttributeValue(object, name, ref) !== 0 || !ref[0]) throw new Error('Input target is unavailable')
-    return ref[0]
+  if (!pid) throw new Error('Input target is unavailable')
+  const activate = () => {
+    const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid)
+    if (app.isNil() || app.isTerminated) throw new Error('Input target is no longer running')
+    app.activateWithOptions(0)
+    $.NSThread.sleepForTimeInterval(0.15)
+    const frontmost = Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier)
+    if (frontmost !== pid) throw new Error(`Could not activate input target (expected pid ${pid}, frontmost pid ${frontmost})`)
   }
-  const originalWindow = attribute(app, 'AXFocusedWindow')
-  const originalInput = attribute(app, 'AXFocusedUIElement')
-  const sameTarget = () => Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) === pid &&
-    $.CFEqual(originalWindow, attribute(app, 'AXFocusedWindow')) && $.CFEqual(originalInput, attribute(app, 'AXFocusedUIElement'))
+  if (args[1] === 'restore') {
+    activate()
+    return ''
+  }
+  if (!$.AXIsProcessTrusted() || !$.CGPreflightPostEventAccess()) throw new Error('macOS Accessibility permission is required')
   const stdout = $.NSFileHandle.fileHandleWithStandardOutput
-  const write = text => stdout.writeData($.NSString.stringWithString(text).dataUsingEncoding($.NSUTF8StringEncoding))
-  write('ready\n')
+  stdout.writeData($.NSString.stringWithString('ready\n').dataUsingEncoding($.NSUTF8StringEncoding))
   const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile
   const input = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)))
-  if (typeof input.text !== 'string' || input.text.length > 30000 || !sameTarget()) throw new Error('The original input is no longer focused')
-  for (let i = 0; i < input.text.length;) {
-    let length = Math.min(20, input.text.length - i)
-    if (i + length < input.text.length && /[\uD800-\uDBFF]/.test(input.text[i + length - 1])) length--
-    const chunk = input.text.slice(i, i + length)
-    if (!sameTarget()) throw new Error('The original input is no longer focused')
-    const bytes = $.NSString.stringWithString(chunk).dataUsingEncoding($.NSUTF16LittleEndianStringEncoding)
-    for (const down of [true, false]) {
-      const event = $.CGEventCreateKeyboardEvent(null, 0, down)
-      if (!event) throw new Error('Unable to create keyboard event')
-      $.CGEventKeyboardSetUnicodeString(event, chunk.length, bytes.bytes)
+  if (input.op !== 'paste') throw new Error('Invalid input operation')
+
+  // Match Wox's clipboard action: activate the original application, allow it
+  // to regain focus, then send a Command-V key press and release.
+  activate()
+  for (const down of [true, false]) {
+    const event = $.CGEventCreateKeyboardEvent(null, 9, down)
+    // A JXA pointer is a truthy Ref even when it wraps NULL. CGEventGetType
+    // safely returns 0 for NULL; a real key event is 10 (down) or 11 (up).
+    if ($.CGEventGetType(event) !== (down ? 10 : 11)) throw new Error('Unable to create keyboard event')
+    try {
+      $.CGEventSetFlags(event, 0x100000)
+      if (!($.CGEventGetFlags(event) & 0x100000)) throw new Error('Unable to set Command modifier')
       $.CGEventPost(0, event)
+    } finally {
       $.CFRelease(event)
     }
-    i += length
   }
   return ''
 }

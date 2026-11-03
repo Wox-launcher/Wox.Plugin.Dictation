@@ -21,6 +21,8 @@ export class Controller {
   private readonly media: MediaPause
   private readonly insertion: TextInsert
   private target?: InputTarget
+  private targetPid?: number
+  private captureError = ""
   private async showProcessing(operation: AbortController, key: string, fallback: string): Promise<void> {
     const status = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
     operation.signal.throwIfAborted()
@@ -39,7 +41,7 @@ export class Controller {
     view.onCommand = async command => {
       try {
         if (command === "stop") await this.stop()
-        if (command === "cancel") await this.cancel()
+        if (command === "cancel") await this.cancel(true)
         if (command === "copy") await api.Copy(ctx, { type: "text", text: this.text })
       } catch (error) {
         await this.fail(error)
@@ -81,7 +83,7 @@ export class Controller {
     await this.start(action, "", event.Phase === "started" ? event.ActivationID : "", event.Env?.ActiveWindowPid)
   }
 
-  async start(action: Action, selection = "", activationID = "", targetPid?: number): Promise<void> {
+  async start(action: Action, selection = "", activationID = "", targetPid?: number, captureAfterHide = false): Promise<void> {
     if (this.state !== "idle") throw new Error("Dictation is already busy")
     if (action.output === "chat") throw new Error("AI Chat output is unavailable. Choose the result window or clipboard instead.")
     if (action.prompt.includes("{wox:selected_text}") && !selection) throw new Error("This action requires a text selection query")
@@ -94,14 +96,40 @@ export class Controller {
     this.selection = selection
     this.text = ""
     this.target = undefined
-    const target = action.output === "input" ? this.insertion.capture(targetPid, operation.signal).catch(() => undefined) : Promise.resolve(undefined)
+    this.targetPid = targetPid
+    this.captureError = ""
+    const capture = () => action.output === "input" ? this.insertion.capture(targetPid, operation.signal).catch(async error => {
+      if (!operation.signal.aborted) {
+        this.captureError = String(error)
+        await this.api.Log(this.ctx, "Warning", `Could not capture dictation input target: ${this.captureError}`).catch(() => {})
+      }
+      return undefined
+    }) : Promise.resolve(undefined)
     try {
+      if (!captureAfterHide) {
+        const target = await capture()
+        if (operation.signal.aborted) {
+          this.insertion.release(target)
+          operation.signal.throwIfAborted()
+        }
+        this.target = target
+      }
       if (!(await this.engine.downloads.ready(model))) throw new Error("Download a speech model first: dictate model")
       operation.signal.throwIfAborted()
       await this.view.update({ status: this.engine.isModelLoaded(model) ? "Preparing microphone…" : "Loading speech engine…", busy: true })
+      await this.api.HideApp(this.ctx)
+      operation.signal.throwIfAborted()
+      if (captureAfterHide) {
+        const target = await capture()
+        if (operation.signal.aborted) {
+          this.insertion.release(target)
+          operation.signal.throwIfAborted()
+        }
+        this.target = target
+      }
+      operation.signal.throwIfAborted()
       await this.view.show()
       operation.signal.throwIfAborted()
-      await this.api.HideApp(this.ctx)
       await this.engine.downloads.finishMigratedModel(model, operation.signal, message => {
         void this.view.update({ status: message, busy: true }).catch(() => {})
       })
@@ -112,9 +140,7 @@ export class Controller {
       if (this.store.settings.duckVolume === "true") await this.media.pause(operation.signal)
       operation.signal.throwIfAborted()
       await this.engine.start(model, this.store.settings.inputDevice || "", this.store.settings.playSound === "true")
-      const capturedTarget = await target
       operation.signal.throwIfAborted()
-      this.target = capturedTarget
       this.state = "recording"
       await this.view.update({ status: "Listening…", recording: true, busy: true })
       void this.engine.feedback("start").catch(() => {})
@@ -205,6 +231,10 @@ export class Controller {
       let inserted = false
       if (action.output === "input") {
         try {
+          await this.view.hide()
+          // Give the previous window time to regain focus before checking it.
+          await new Promise(resolve => setTimeout(resolve, 150))
+          operation.signal.throwIfAborted()
           inserted = await this.insertion.insert(this.target, text, operation.signal)
         } catch (error) {
           operation.signal.throwIfAborted()
@@ -233,8 +263,11 @@ export class Controller {
       if (inserted || fallbackCopied) {
         await this.view.close()
         if (fallbackCopied) {
-          const message = await this.api.GetTranslation(this.ctx, "plugin_dictation_insert_fallback").catch(() => "Could not insert automatically. Copied to clipboard.")
-          await this.api.Notify(this.ctx, message || "Could not insert automatically. Copied to clipboard.")
+          const permission = this.captureError.includes("macOS Accessibility permission is required")
+          const key = permission ? "plugin_dictation_insert_accessibility" : "plugin_dictation_insert_fallback"
+          const fallback = permission ? "Copied to clipboard. Allow Accessibility access for Wox and its Node.js runtime in System Settings, then try again." : "Could not insert automatically. Copied to clipboard."
+          const message = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
+          await this.api.Notify(this.ctx, message && (!permission || message !== key) ? message : fallback)
         }
         return
       }
@@ -243,6 +276,7 @@ export class Controller {
         text,
         result: true
       })
+      if (action.output === "input") await this.view.show()
     } catch (error) {
       if (!operation.signal.aborted) await this.fail(error)
     }
@@ -280,13 +314,15 @@ export class Controller {
     await this.view.update({ status: String(error), text: this.text, result: !!this.text }).catch(() => {})
     await this.api.Notify(this.ctx, String(error))
   }
-  async cancel(): Promise<void> {
+  async cancel(restoreFocus = false): Promise<void> {
     if (this.cancelTask) return this.cancelTask
-    this.cancelTask = this.cancelSession().finally(() => { this.cancelTask = undefined })
+    this.cancelTask = this.cancelSession(restoreFocus).finally(() => { this.cancelTask = undefined })
     return this.cancelTask
   }
-  private async cancelSession(): Promise<void> {
+  private async cancelSession(restoreFocus: boolean): Promise<void> {
     const state = this.state
+    const targetPid = this.targetPid
+    this.targetPid = undefined
     this.state = "stopping"
     this.operation?.abort()
     this.insertion.release(this.target)
@@ -298,8 +334,14 @@ export class Controller {
     const cancelEngine = state === "recording"
       ? this.engine.cancel(this.store.settings.modelLoadMode === "eager").catch(() => this.engine.dispose("cancel failed"))
       : Promise.resolve()
+    const closeWindow = async () => {
+      await this.view.close()
+      if (restoreFocus && state !== "idle") {
+        await this.insertion.restoreFocus(targetPid).catch(error => this.api.Log(this.ctx, "Warning", `Could not restore dictation focus: ${String(error)}`).catch(() => {}))
+      }
+    }
     try {
-      await Promise.all([cancelEngine, this.media.resume(), this.view.close()])
+      await Promise.all([cancelEngine, this.media.resume(), closeWindow()])
     } finally {
       await cancelEngine
       this.state = "idle"

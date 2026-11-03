@@ -165,12 +165,22 @@ function setupController() {
     dispose: jest.fn(),
     onEvent: () => {}
   } as unknown as Engine
-  const view = { show: jest.fn(async () => {}), update: jest.fn(async () => {}), close: jest.fn(async () => {}), onCommand: async () => {} } as unknown as DictationWindow
+  const view = { show: jest.fn(async () => {}), hide: jest.fn(async () => {}), update: jest.fn(async () => {}), close: jest.fn(async () => {}), onCommand: async () => {} } as unknown as DictationWindow
   const controller = new Controller(api, ctx, store, engine, view)
   return { controller, engine, view, store, api }
 }
 
 describe("session lifecycle", () => {
+  test("cancelling from the window restores the original app after closing it", async () => {
+    const restore = jest.spyOn(TextInsert.prototype, "restoreFocus").mockResolvedValue()
+    const { controller, view } = setupController()
+    await controller.start({ ...defaultAction, output: "clipboard" }, "", "", 123)
+    await view.onCommand("cancel")
+    expect(restore).toHaveBeenCalledWith(123)
+    expect(jest.mocked(view.close).mock.invocationCallOrder[0]).toBeLessThan(restore.mock.invocationCallOrder[0])
+    expect(controller.state).toBe("idle")
+    restore.mockRestore()
+  })
   test("cancelling a recording keeps the model and waits for capture to close", async () => {
     const { controller, engine, store } = setupController()
     let finish!: () => void
@@ -278,10 +288,40 @@ describe("session lifecycle", () => {
     await controller.stop()
     expect(capture).toHaveBeenCalledWith(123, expect.any(AbortSignal))
     expect(insert).toHaveBeenCalledWith("1:2:123", "hello", expect.any(AbortSignal))
+    expect(jest.mocked(view.hide).mock.invocationCallOrder[0]).toBeLessThan(insert.mock.invocationCallOrder[0])
     expect(view.close).toHaveBeenCalled()
     expect(api.Copy).not.toHaveBeenCalled()
     capture.mockRestore()
     insert.mockRestore()
+  })
+  test("captures a selection action target after hiding Wox", async () => {
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockResolvedValue("1:2:123")
+    const { controller, api } = setupController()
+    await controller.start(defaultAction, "selected text", "", 123, true)
+    expect(jest.mocked(api.HideApp).mock.invocationCallOrder[0]).toBeLessThan(capture.mock.invocationCallOrder[0])
+    expect(capture).toHaveBeenCalledWith(123, expect.any(AbortSignal))
+    await controller.cancel()
+    capture.mockRestore()
+  })
+  test("captures a hotkey target before displaying or hiding Wox windows", async () => {
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockResolvedValue("1:2:123")
+    const { controller, api, view } = setupController()
+    await controller.start(defaultAction, "", "", 123)
+    expect(capture.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(view.show).mock.invocationCallOrder[0])
+    expect(capture.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(api.HideApp).mock.invocationCallOrder[0])
+    await controller.cancel()
+    capture.mockRestore()
+  })
+  test("explains missing macOS Accessibility access when falling back to the clipboard", async () => {
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockRejectedValue(new Error("macOS Accessibility permission is required"))
+    const { controller, api } = setupController()
+    await controller.start(defaultAction, "", "", 123)
+    await controller.stop()
+    expect(api.Copy).toHaveBeenCalledWith(ctx, { type: "text", text: "hello" })
+    expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("macOS Accessibility permission is required"))
+    expect(api.GetTranslation).toHaveBeenCalledWith(ctx, "plugin_dictation_insert_accessibility")
+    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Allow Accessibility access"))
+    capture.mockRestore()
   })
   test("copies the transcript and shows a notification if insertion fails", async () => {
     const capture = jest.spyOn(TextInsert.prototype, "capture").mockResolvedValue("1:2:123")
@@ -302,6 +342,7 @@ describe("session lifecycle", () => {
     await controller.start(defaultAction)
     await controller.stop()
     expect(view.update).toHaveBeenLastCalledWith(expect.objectContaining({ result: true, text: "hello" }))
+    expect(view.show).toHaveBeenCalledTimes(2)
     expect(store.history[0].content).toBe("hello")
     expect(view.close).not.toHaveBeenCalled()
   })
@@ -380,6 +421,7 @@ describe("session lifecycle", () => {
     )
     const event = { SettingKey: "defaultHotkey", Kind: "holdModifier" as const, Phase: "started" as const, Hotkey: "hold:right_alt", ActivationID: "first", Timestamp: 1 }
     const first = controller.onHotkey(event)
+    while (!ready) await new Promise(resolve => setImmediate(resolve))
     await controller.onHotkey({ ...event, Phase: "ended", EndReason: "released" })
     ready(true)
     await first

@@ -50,7 +50,7 @@ export class TextInsert {
     child.stdin.on("error", () => {})
     const completed = new Promise<void>((resolve, reject) => {
       child.on("error", reject)
-      child.on("close", code => code === 0 ? resolve() : reject(new Error(error || "Could not insert text")))
+      child.on("close", (code, signal) => code === 0 ? resolve() : reject(new Error(error || `macOS input helper exited (code ${code}, signal ${signal || "none"})`)))
     })
     void completed.then(() => {
       if (!isReady) { clearTimeout(timer); failed(new Error("Input target is unavailable")) }
@@ -105,6 +105,22 @@ export class TextInsert {
     if (target && typeof target !== "string") target.child.kill()
   }
 
+  async restoreFocus(pid: number | undefined): Promise<void> {
+    if (process.platform !== "darwin" || !pid || pid <= 0) return
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("/usr/bin/osascript", ["-l", "JavaScript", join(this.directory, "insert-macos.js"), String(pid), "restore"], { stdio: ["ignore", "ignore", "pipe"] })
+      let error = ""
+      const timer = setTimeout(() => child.kill(), 5000)
+      child.stderr.on("data", data => { error = (error + String(data)).slice(0, 1024) })
+      child.on("error", err => { clearTimeout(timer); reject(err) })
+      child.on("close", (code, signal) => {
+        clearTimeout(timer)
+        if (code === 0) resolve()
+        else reject(new Error(error || `Could not restore focus (code ${code}, signal ${signal || "none"})`))
+      })
+    })
+  }
+
   async insert(target: InputTarget | undefined, text: string, signal: AbortSignal): Promise<boolean> {
     if (!target || text.length > 30000) return false
     if (typeof target !== "string") {
@@ -124,7 +140,9 @@ export class TextInsert {
       }
       const timer = setTimeout(() => target.child.kill(), 10000)
       try {
-        target.child.stdin.end(JSON.stringify({ text }), "utf8")
+        await this.api.Copy(this.ctx, { type: "text", text })
+        signal.throwIfAborted()
+        target.child.stdin.end(JSON.stringify({ op: "paste" }), "utf8")
         await target.completed
         return true
       } finally {

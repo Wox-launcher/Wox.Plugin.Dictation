@@ -1,51 +1,77 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { runInNewContext } from "node:vm"
+import { spawnSync } from "node:child_process"
 
 const source = readFileSync(join(process.cwd(), "src/insert-macos.js"), "utf8")
 
-function macHelper(text: string, options: { trusted?: boolean; focused?: boolean } = {}) {
-  const events: { down: boolean; text?: string; length?: number }[] = []
-  const window = {}, input = {}, app = {}
-  let writes = ""
+function macHelper(options: { trusted?: boolean; frontmost?: number; terminated?: boolean } = {}) {
+  const calls: string[] = []
+  const events: { key: number; down: boolean; flags?: number }[] = []
+  let frontmost = options.frontmost ?? 321
   const objc = {
     AXIsProcessTrusted: () => options.trusted !== false,
-    AXUIElementCreateApplication: () => app,
-    AXUIElementCopyAttributeValue: (_obj: unknown, name: string, ref: unknown[]) => { ref[0] = name === "AXFocusedWindow" ? window : options.focused === false ? {} : input; return 0 },
-    CFEqual: (a: unknown, b: unknown) => a === b,
-    NSWorkspace: { sharedWorkspace: { frontmostApplication: { processIdentifier: 123 } } },
-    NSUTF8StringEncoding: 4, NSUTF16LittleEndianStringEncoding: 5,
-    NSString: {
-      stringWithString: (value: string) => ({ dataUsingEncoding: () => ({ bytes: value }) }),
-      alloc: { initWithDataEncoding: (value: string) => value }
-    },
-    NSFileHandle: { fileHandleWithStandardOutput: { writeData: (value: { bytes: string }) => { writes += value.bytes } }, fileHandleWithStandardInput: { readDataToEndOfFile: JSON.stringify({ text }) } },
-    CGEventCreateKeyboardEvent: (_source: unknown, _key: number, down: boolean) => ({ down }),
-    CGEventKeyboardSetUnicodeString: (event: { text?: string; length?: number }, length: number, value: string) => { event.text = value; event.length = length },
-    CGEventPost: (_tap: number, event: { down: boolean; text?: string; length?: number }) => events.push(event),
+    CGPreflightPostEventAccess: () => options.trusted !== false,
+    NSRunningApplication: { runningApplicationWithProcessIdentifier: (pid: number) => ({
+      isTerminated: options.terminated ?? false,
+      isNil: () => false,
+      activateWithOptions: () => { calls.push(`activate:${pid}`); if (options.frontmost === undefined) frontmost = pid }
+    }) },
+    NSWorkspace: { sharedWorkspace: { frontmostApplication: { get processIdentifier() { return frontmost } } } },
+    NSThread: { sleepForTimeInterval: (seconds: number) => calls.push(`wait:${seconds}`) },
+    NSUTF8StringEncoding: 4,
+    NSString: { stringWithString: (value: string) => ({ dataUsingEncoding: () => value }), alloc: { initWithDataEncoding: (value: string) => value } },
+    NSFileHandle: { fileHandleWithStandardOutput: { writeData: (value: string) => calls.push(value) }, fileHandleWithStandardInput: { readDataToEndOfFile: JSON.stringify({ op: "paste" }) } },
+    CGEventCreateKeyboardEvent: (_source: unknown, key: number, down: boolean) => ({ key, down }),
+    CGEventGetType: (event: { down: boolean }) => event.down ? 10 : 11,
+    CGEventSetFlags: (event: { flags?: number }, flags: number) => { event.flags = flags },
+    CGEventGetFlags: (event: { flags?: number }) => event.flags,
+    CGEventPost: (_tap: number, event: { key: number; down: boolean; flags?: number }) => events.push(event),
     CFRelease: () => {}
   }
-  const context = { $: objc, ObjC: { import: () => {}, bindFunction: () => {}, unwrap: (value: unknown) => value }, Ref: () => [] }
+  const context = { $: objc, ObjC: { import: () => {}, bindFunction: () => {}, unwrap: (value: unknown) => value } }
   const run = runInNewContext(`${source}\nrun`, context) as (args: string[]) => void
-  return { run, events, writes: () => writes }
+  return { run, calls, events }
 }
 
-test("macOS helper sends Unicode in bounded chunks without splitting emoji", () => {
-  const text = `${"a".repeat(19)}😀 中文\nsecond line`
-  const helper = macHelper(text)
+test("macOS activates the original app and sends Command-V like Wox clipboard", () => {
+  const helper = macHelper()
   helper.run(["123"])
-  expect(helper.writes()).toBe("ready\n")
-  const downs = helper.events.filter(event => event.down)
-  expect(downs.map(event => event.text).join("")).toBe(text)
-  expect(downs.every(event => event.length! <= 20 && !/[\uD800-\uDBFF]$/.test(event.text!))).toBe(true)
-  expect(helper.events).toHaveLength(downs.length * 2)
+  expect(helper.calls).toEqual(["ready\n", "activate:123", "wait:0.15"])
+  expect(helper.events).toEqual([{ key: 9, down: true, flags: 0x100000 }, { key: 9, down: false, flags: 0x100000 }])
 })
 
-test("macOS helper rejects missing accessibility permission or a changed focused input", () => {
-  const denied = macHelper("text", { trusted: false })
-  expect(() => denied.run(["123"])).toThrow()
+const macTest = process.platform === "darwin" ? test : test.skip
+macTest("the real JXA bridge creates both key events without crashing", () => {
+  // Keep the real native event bridge but replace permission, activation and
+  // posting so this test never changes the desktop or sends a keystroke.
+  const nativeSource = source
+    .replace("if (!$.AXIsProcessTrusted() || !$.CGPreflightPostEventAccess())", "if (false)")
+    .replace(/const activate = \(\) => \{[\s\S]*?\n\s{2}\}/, "const activate = () => {}")
+    .replace("$.CGEventPost(0, event)", "void event")
+    .replace("function run(args)", "function exercise(args)")
+  const result = spawnSync("/usr/bin/osascript", ["-l", "JavaScript", "-e", `${nativeSource}\nexercise(['123'])`], {
+    input: JSON.stringify({ op: "paste" }), encoding: "utf8", timeout: 5000
+  })
+  expect({ status: result.status, signal: result.signal }).toEqual({ status: 0, signal: null })
+  expect(result.stdout).toContain("ready")
+})
+
+test("restoring focus activates the original app without posting a paste", () => {
+  const helper = macHelper({ trusted: false })
+  helper.run(["123", "restore"])
+  expect(helper.calls).toEqual(["activate:123", "wait:0.15"])
+  expect(helper.events).toHaveLength(0)
+})
+
+test("macOS does not paste without permission or when the original app cannot be activated", () => {
+  const denied = macHelper({ trusted: false })
+  expect(() => denied.run(["123"])).toThrow("macOS Accessibility permission is required")
   expect(denied.events).toHaveLength(0)
-  const changed = macHelper("text", { focused: false })
-  expect(() => changed.run(["123"])).toThrow()
+  const changed = macHelper({ frontmost: 456 })
+  expect(() => changed.run(["123"])).toThrow("Could not activate input target")
   expect(changed.events).toHaveLength(0)
+  const closed = macHelper({ terminated: true })
+  expect(() => closed.run(["123"])).toThrow("no longer running")
+  expect(closed.events).toHaveLength(0)
 })
