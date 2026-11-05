@@ -5,6 +5,7 @@ export interface ViewState {
   text?: string
   level?: number
   recording?: boolean
+  starting?: boolean
   busy?: boolean
   result?: boolean
 }
@@ -13,6 +14,9 @@ export class DictationWindow {
   private ready = false
   private window?: PluginWindow
   private creating?: Promise<void>
+  private visibility = 0
+  private visible = false
+  private visibilityTask: Promise<void> = Promise.resolve()
   private expanded = false
   private resizing: Promise<void> = Promise.resolve()
   private posting: Promise<void> = Promise.resolve()
@@ -24,22 +28,40 @@ export class DictationWindow {
     readonly ctx: Context
   ) {}
 
-  async show(): Promise<void> {
-    if (this.creating) await this.creating
-    if (!this.window) {
+  async prepare(): Promise<void> {
+    if (!this.window && !this.creating) {
       this.creating = this.create().finally(() => {
         this.creating = undefined
       })
-      await this.creating
     }
-    const result = await this.window!.Show(this.ctx, { Activate: true })
-    if (!result.Success) throw new Error(result.ErrMsg || "Cannot show Dictation window")
+    await this.creating
+  }
+
+  async show(activate = true): Promise<void> {
+    const visibility = this.visibility
+    const task = this.visibilityTask.catch(() => {}).then(async () => {
+      await this.prepare()
+      if (visibility !== this.visibility) return
+      const result = await this.window!.Show(this.ctx, { Activate: activate })
+      if (!result.Success) throw new Error(result.ErrMsg || "Cannot show Dictation window")
+      if (visibility !== this.visibility) return
+      this.visible = true
+      await this.update(this.state)
+    })
+    this.visibilityTask = task
+    await task
   }
 
   async hide(): Promise<void> {
-    if (!this.window) return
-    const result = await this.window.Hide(this.ctx, {})
-    if (!result.Success) throw new Error(result.ErrMsg || "Cannot hide Dictation window")
+    this.visibility++
+    this.visible = false
+    const task = this.visibilityTask.catch(() => {}).then(async () => {
+      if (!this.window) return
+      const result = await this.window.Hide(this.ctx, {})
+      if (!result.Success) throw new Error(result.ErrMsg || "Cannot hide Dictation window")
+    })
+    this.visibilityTask = task
+    await task
   }
 
   private async create(): Promise<void> {
@@ -52,7 +74,7 @@ export class DictationWindow {
       main{gap:8px;padding:8px 36px 8px 8px}#status{font-size:12px;line-height:16px;max-height:40px;overflow:auto}body.expanded #status{font-size:14px;max-height:none}#wave{width:100%;max-width:132px;height:24px;gap:5px}.bar{width:4px;height:8px}#cancel{right:8px;width:28px;height:28px;font-size:22px}#spinner{width:16px;height:16px;flex:none;border:2px solid ${color(colors.Border)};border-top-color:${color(colors.Text)};border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){#spinner{animation:none}}
       </style><main><button id="wave" type="button" title="Stop dictation" aria-label="Stop dictation" hidden><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></button><span id="spinner" aria-hidden="true" hidden></span><div id="status" role="status"></div><div id="result"><pre id="text"></pre><footer><button id="copy" type="button">Copy</button></footer></div></main><button id="cancel" type="button" aria-label="Cancel dictation" title="Cancel dictation">×</button><script>
       const el=id=>document.getElementById(id),bars=document.querySelectorAll('.bar'),weights=[.55,.8,.65,1,.65,.8,.55];
-      woxWindow.onMessage(s=>{document.body.classList.toggle('expanded',!!s.result);el('status').textContent=s.status;el('status').hidden=!!s.recording;el('spinner').hidden=!s.busy||!!s.recording||!!s.result;el('text').textContent=s.text||'';el('wave').hidden=!s.recording;el('cancel').setAttribute('aria-label',s.busy?'Cancel dictation':'Close');if(typeof s.level==='number'){const level=Math.max(0,Math.min(1,s.level));bars.forEach((bar,i)=>bar.style.height=(5+level*19*weights[i])+'px')}});
+      woxWindow.onMessage(s=>{document.body.classList.toggle('expanded',!!s.result);el('status').textContent=s.status;el('status').hidden=!!s.recording||!!s.starting;el('spinner').hidden=!s.busy||!!s.recording||!!s.starting||!!s.result;el('text').textContent=s.text||'';el('wave').hidden=!s.recording&&!s.starting;el('wave').setAttribute('aria-label',s.starting?'Preparing microphone':'Stop dictation');el('cancel').setAttribute('aria-label',s.busy?'Cancel dictation':'Close');if(typeof s.level==='number'){const level=Math.max(0,Math.min(1,s.level));bars.forEach((bar,i)=>bar.style.height=(5+level*19*weights[i])+'px')}});
       el('wave').onclick=()=>woxWindow.postMessage({command:'stop'});for(const id of ['cancel','copy'])el(id).onclick=()=>woxWindow.postMessage({command:id});
       document.addEventListener('keydown',e=>{if(e.key==='Escape')woxWindow.postMessage({command:'cancel'})});
       </script></html>`
@@ -70,6 +92,8 @@ export class DictationWindow {
           await this.api.Notify(this.ctx, event.ErrMsg || "Dictation window failed")
         }
         if (event.Type === "closed") {
+          this.visible = false
+          this.ready = false
           this.window = undefined
           void this.onCommand("cancel").catch(() => {})
         }
@@ -101,17 +125,28 @@ export class DictationWindow {
       })
       await this.resizing
     }
-    if (this.window && this.ready) {
+    if (this.window && this.ready && this.visible) {
       const window = this.window
+      const visibility = this.visibility
       this.posting = this.posting.catch(() => {}).then(async () => {
-        if (revision !== this.revision || window !== this.window || !this.ready) return
-        const result = await window.Content.PostMessage(this.ctx, { Data: state })
-        if (!result.Success) throw new Error(result.ErrMsg || "Window update failed")
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if (revision !== this.revision || window !== this.window || !this.ready || !this.visible || visibility !== this.visibility) return
+          const result = await window.Content.PostMessage(this.ctx, { Data: state })
+          if (result.Success) return
+          if (revision !== this.revision || !this.visible || visibility !== this.visibility || window !== this.window) return
+          if (result.ErrMsg !== "document unavailable" || attempt === 19) throw new Error(result.ErrMsg || "Window update failed")
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
       })
       await this.posting
     }
   }
   async close(): Promise<void> {
+    await this.hide()
+  }
+
+  async destroy(): Promise<void> {
+    await this.hide()
     this.generation++
     this.revision++
     this.ready = false

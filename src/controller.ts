@@ -1,5 +1,7 @@
 import type { Context, HotkeyEvent, PublicAPI } from "@wox-launcher/wox-plugin"
-import { models } from "./downloads"
+import { randomUUID } from "node:crypto"
+import { join } from "node:path"
+import { exists, models } from "./downloads"
 import type { Engine } from "./engine"
 import { chat, cleanTranscript, expandPrompt, parseModel, refineInput, refinePrompt, sanitize } from "./refine"
 import { recentContext, type Action, type Store } from "./store"
@@ -21,8 +23,16 @@ export class Controller {
   private readonly media: MediaPause
   private readonly insertion: TextInsert
   private target?: InputTarget
+  private captureTask?: Promise<void>
+  private warmupOperation?: AbortController
+  private warmupTask?: Promise<void>
   private targetPid?: number
   private captureError = ""
+  private trace?: { id: string; startedAt: number }
+  private timing(trace: { id: string; startedAt: number }, stage: string, details = ""): void {
+    const now = Date.now()
+    void this.api.Log(this.ctx, "Info", `[Dictation timing] session=${trace.id} stage=${stage} atMs=${now} elapsedMs=${now - trace.startedAt}${details ? ` ${details}` : ""}`).catch(() => {})
+  }
   private async showProcessing(operation: AbortController, key: string, fallback: string): Promise<void> {
     const status = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
     operation.signal.throwIfAborted()
@@ -63,10 +73,43 @@ export class Controller {
     }
   }
 
+  warmup(): void {
+    if (this.warmupTask || this.state !== "idle") return
+    const operation = new AbortController()
+    const model = models.find(m => m.id === this.store.settings.model) || models[0]
+    this.warmupOperation = operation
+    const task = (async () => {
+      if (!(await exists(join(this.engine.downloads.runtimePath(), ".complete"))) || !(await exists(join(this.engine.downloads.modelPath(model), ".complete")))) return
+      operation.signal.throwIfAborted()
+      await this.engine.prepare(operation.signal, () => {})
+      operation.signal.throwIfAborted()
+      await this.engine.preload(model, this.store.settings.modelLoadMode !== "lazy")
+      operation.signal.throwIfAborted()
+      if (this.store.settings.keepMicrophoneReady !== "false") await this.engine.warmMicrophone(this.store.settings.inputDevice || "")
+    })().catch(error => {
+      if (!operation.signal.aborted) void this.api.Log(this.ctx, "Warning", `Could not prewarm dictation: ${String(error)}`).catch(() => {})
+    }).finally(() => {
+      if (this.warmupTask === task) {
+        this.warmupTask = undefined
+        this.warmupOperation = undefined
+      }
+    })
+    this.warmupTask = task
+  }
+
+  cancelWarmup(): void {
+    if (!this.warmupOperation) return
+    this.warmupOperation.abort()
+    this.warmupOperation = undefined
+    this.warmupTask = undefined
+    this.engine.dispose("prewarm cancelled")
+  }
+
   // Release is matched to its own recording, including release while models are loading.
   async onHotkey(event: HotkeyEvent): Promise<void> {
     if (event.Phase === "ended") {
       if (event.ActivationID !== this.hotkeyActivation) return
+      if (this.trace) this.timing(this.trace, "hotkey_ended", `eventToPluginMs=${Date.now() - event.Timestamp} reason=${event.EndReason || "unknown"}`)
       this.hotkeyActivation = ""
       if (event.EndReason === "released") await this.stop()
       else await this.cancel()
@@ -80,14 +123,15 @@ export class Controller {
           : undefined
     if (!action) return
     if (event.Phase === "triggered" && (this.state === "starting" || this.state === "recording")) {
+      if (this.trace) this.timing(this.trace, "hotkey_stop", `eventToPluginMs=${Date.now() - event.Timestamp}`)
       await this.stop()
       return
     }
     if (this.state !== "idle") return
-    await this.start(action, "", event.Phase === "started" ? event.ActivationID : "", event.Env?.ActiveWindowPid)
+    await this.start(action, "", event.Phase === "started" ? event.ActivationID : "", event.Env?.ActiveWindowPid, false, event.Timestamp, event.Kind)
   }
 
-  async start(action: Action, selection = "", activationID = "", targetPid?: number, captureAfterHide = false): Promise<void> {
+  async start(action: Action, selection = "", activationID = "", targetPid?: number, captureAfterHide = false, hotkeyTime?: number, hotkeyKind?: string): Promise<void> {
     if (this.state !== "idle") throw new Error("Dictation is already busy")
     if (action.output === "chat") throw new Error("AI Chat output is unavailable. Choose the result window or clipboard instead.")
     if (action.prompt.includes("{wox:selected_text}") && !selection) throw new Error("This action requires a text selection query")
@@ -102,6 +146,11 @@ export class Controller {
     this.target = undefined
     this.targetPid = targetPid
     this.captureError = ""
+    const startedAt = Date.now()
+    const trace = { id: randomUUID(), startedAt }
+    this.trace = trace
+    const eventDelay = hotkeyTime && hotkeyTime > 0 ? startedAt - hotkeyTime : undefined
+    this.timing(trace, "start_received", `source=${hotkeyKind || "action"} eventToPluginMs=${eventDelay ?? "unknown"} sound=${this.store.settings.playSound === "true"} keepMic=${this.store.settings.keepMicrophoneReady !== "false"}`)
     const capture = () => action.output === "input" ? this.insertion.capture(targetPid, operation.signal).catch(async error => {
       if (!operation.signal.aborted) {
         this.captureError = String(error)
@@ -109,55 +158,85 @@ export class Controller {
       }
       return undefined
     }) : Promise.resolve(undefined)
+    let startupMessage = this.engine.isModelLoaded(model) ? "Preparing microphone…" : "Loading speech engine…"
+    let showStartupMessage = false
+    const startupTimer = setTimeout(() => {
+      if (this.operation !== operation || this.state !== "starting" || operation.signal.aborted) return
+      showStartupMessage = true
+      void this.view.update({ status: startupMessage, busy: true }).catch(() => {})
+    }, 800)
+    const progress = (message: string) => {
+      startupMessage = message
+      if (showStartupMessage && this.operation === operation && this.state === "starting" && !operation.signal.aborted)
+        void this.view.update({ status: message, busy: true }).catch(() => {})
+    }
     try {
-      if (!captureAfterHide) {
+      const capturing = (async () => {
+        if (captureAfterHide) {
+          await this.api.HideApp(this.ctx)
+          operation.signal.throwIfAborted()
+        }
         const target = await capture()
         if (operation.signal.aborted) {
           this.insertion.release(target)
           operation.signal.throwIfAborted()
         }
         this.target = target
-      }
+        this.timing(trace, "target_capture_complete", `available=${!!target}`)
+      })()
+      this.captureTask = capturing
+      const showing = (async () => {
+        await this.view.update({ status: "Preparing…", starting: true, busy: true, level: 0 })
+        operation.signal.throwIfAborted()
+        await this.view.show(false)
+        this.timing(trace, "window_show_requested")
+      })()
+      const presentation = Promise.all([capturing, showing]).then(async () => {
+        operation.signal.throwIfAborted()
+        if (this.operation !== operation || (this.state !== "starting" && this.state !== "recording")) return
+        if (!captureAfterHide) await this.api.HideApp(this.ctx)
+        operation.signal.throwIfAborted()
+        if (this.operation === operation && (this.state === "starting" || this.state === "recording")) await this.view.show()
+      })
+      // Attach a handler immediately while audio startup runs independently.
+      void presentation.catch(() => {})
       if (!(await this.engine.downloads.ready(model))) throw new Error("Download a speech model first: dictate model")
+      this.timing(trace, "model_check_complete", `warmupPending=${!!this.warmupTask}`)
       operation.signal.throwIfAborted()
-      await this.view.update({ status: this.engine.isModelLoaded(model) ? "Preparing microphone…" : "Loading speech engine…", busy: true })
-      await this.api.HideApp(this.ctx)
+      await this.warmupTask
+      this.timing(trace, "warmup_wait_complete")
       operation.signal.throwIfAborted()
-      if (captureAfterHide) {
-        const target = await capture()
-        if (operation.signal.aborted) {
-          this.insertion.release(target)
-          operation.signal.throwIfAborted()
-        }
-        this.target = target
-      }
+      await this.engine.downloads.finishMigratedModel(model, operation.signal, progress)
+      await this.engine.prepare(operation.signal, progress)
+      this.timing(trace, "engine_prepared")
       operation.signal.throwIfAborted()
-      await this.view.show()
-      operation.signal.throwIfAborted()
-      await this.engine.downloads.finishMigratedModel(model, operation.signal, message => {
-        void this.view.update({ status: message, busy: true }).catch(() => {})
-      })
-      await this.engine.prepare(operation.signal, message => {
-        void this.view.update({ status: message, busy: true }).catch(() => {})
-      })
-      operation.signal.throwIfAborted()
+      if (this.engine.isModelLoaded(model)) progress("Preparing microphone…")
       if (this.store.settings.duckVolume === "true") await this.media.pause(operation.signal)
+      this.timing(trace, "media_ready", `pauseEnabled=${this.store.settings.duckVolume === "true"}`)
       operation.signal.throwIfAborted()
-      await this.engine.start(model, this.store.settings.inputDevice || "", this.store.settings.playSound === "true")
+      this.timing(trace, "engine_start_requested")
+      await this.engine.start(model, this.store.settings.inputDevice || "", this.store.settings.playSound === "true", hotkeyTime || startedAt, this.store.settings.duckVolume !== "true", this.store.settings.keepMicrophoneReady !== "false", trace.id, trace.startedAt)
       operation.signal.throwIfAborted()
+      this.timing(trace, "recording_started")
+      void this.api.Log(this.ctx, "Info", `[Dictation] Microphone started in ${Date.now() - startedAt}ms`).catch(() => {})
       this.state = "recording"
-      await this.view.update({ status: "Listening…", recording: true, busy: true })
-      void this.engine.feedback("start").catch(() => {})
       this.maximum = setTimeout(() => {
         void this.stop().catch(error => this.fail(error))
       }, 300000)
+      await this.view.update({ status: "Listening…", recording: true, busy: true })
+      await presentation
     } catch (error) {
-      if (!operation.signal.aborted) await this.fail(error)
+      this.timing(trace, "start_failed", `aborted=${operation.signal.aborted}`)
+      if (!operation.signal.aborted && this.operation === operation) await this.fail(error)
+    } finally {
+      clearTimeout(startupTimer)
     }
   }
 
   // A release during startup cancels. Stop is single-flight and captures a short trailing tail.
   async stop(): Promise<void> {
+    const trace = this.trace
+    if (trace) this.timing(trace, "stop_requested", `state=${this.state}`)
     this.hotkeyActivation = ""
     if (this.state === "starting") {
       await this.cancel()
@@ -172,29 +251,32 @@ export class Controller {
       await new Promise(resolve => setTimeout(resolve, 250))
       operation.signal.throwIfAborted()
       await this.showProcessing(operation, "plugin_dictation_processing", "Processing dictation…")
-      await this.engine.stopCapture()
-      await this.media.resume()
+      await this.engine.stopCapture(this.store.settings.keepMicrophoneReady !== "false")
+      if (trace) this.timing(trace, "capture_stopped")
+      void this.engine.feedback("stop", trace?.id, trace?.startedAt).catch(() => {})
+      if (trace) this.timing(trace, "media_resume_requested")
+      void this.media.resume().then(() => { if (trace) this.timing(trace, "media_resume_completed") }).catch(() => {})
       operation.signal.throwIfAborted()
-      const original = cleanTranscript(await this.engine.stop(this.store.settings.modelLoadMode === "eager"))
+      if (trace) this.timing(trace, "asr_finalize_requested")
+      const original = cleanTranscript(await this.engine.stop(this.store.settings.modelLoadMode !== "lazy"))
+      if (trace) this.timing(trace, "asr_finalize_completed")
       operation.signal.throwIfAborted()
       this.text = original
       this.state = "processing"
       if (!original) {
+        operation.abort()
         this.insertion.release(this.target)
         this.target = undefined
         this.state = "idle"
         this.operation = undefined
         this.hotkeyActivation = ""
-        void this.engine.feedback("stop").catch(() => {})
         await this.view.close()
-        await this.api.ShowToastMsg(this.ctx, { Message: "No speech detected" }).then(result => {
-          if (!result.Success) throw new Error(result.ErrMsg || "Could not show toast")
-        }).catch(error => this.api.Log(this.ctx, "Warning", `Could not show dictation toast: ${String(error)}`).catch(() => {}))
         return
       }
       let text = original
       if (this.store.actions[0].aiRefineEnabled ?? this.store.settings.defaultAIRefineEnabled === "true") {
         try {
+          if (trace) this.timing(trace, "ai_refine_started")
           const model = parseModel(this.store.actions[0].model || this.store.settings.defaultAIModel)
           await this.showProcessing(operation, "plugin_dictation_ai_refining", "Refining with AI…")
           const refined = await chat(
@@ -207,13 +289,16 @@ export class Controller {
             15000
           )
           text = sanitize(original, refined) || original
+          if (trace) this.timing(trace, "ai_refine_completed")
         } catch (error) {
+          if (trace) this.timing(trace, "ai_refine_failed", `aborted=${operation.signal.aborted}`)
           operation.signal.throwIfAborted()
           await this.api.Notify(this.ctx, `AI refinement failed; keeping the transcript. ${String(error)}`)
         }
       }
       if (action.type === "custom" && action.prompt.trim()) {
         try {
+          if (trace) this.timing(trace, "action_ai_started")
           const model = parseModel(action.model || this.store.settings.defaultAIModel)
           await this.showProcessing(operation, "plugin_dictation_action_ai_processing", "Processing with AI…")
           text = await chat(
@@ -224,7 +309,9 @@ export class Controller {
             expandPrompt(action.prompt, text, this.selection),
             operation.signal
           )
+          if (trace) this.timing(trace, "action_ai_completed")
         } catch (error) {
+          if (trace) this.timing(trace, "action_ai_failed", `aborted=${operation.signal.aborted}`)
           operation.signal.throwIfAborted()
           await this.store.addHistory(original, original)
           throw error
@@ -233,17 +320,25 @@ export class Controller {
       operation.signal.throwIfAborted()
       if (!text.trim()) throw new Error("The action returned no text")
       this.text = text
+      if (trace) this.timing(trace, "history_save_started")
       await this.store.addHistory(text, original)
+      if (trace) this.timing(trace, "history_save_completed")
       operation.signal.throwIfAborted()
+      if (trace) this.timing(trace, "output_ready")
       let inserted = false
       if (action.output === "input") {
         try {
+          await this.captureTask
+          operation.signal.throwIfAborted()
           await this.view.hide()
           // Give the previous window time to regain focus before checking it.
           await new Promise(resolve => setTimeout(resolve, 150))
           operation.signal.throwIfAborted()
-          inserted = await this.insertion.insert(this.target, text, operation.signal)
+          if (trace) this.timing(trace, "insert_requested")
+          inserted = await this.insertion.insert(this.target, text, operation.signal, trace)
+          if (trace) this.timing(trace, "insert_completed", `inserted=${inserted}`)
         } catch (error) {
+          if (trace) this.timing(trace, "insert_failed", `aborted=${operation.signal.aborted}`)
           operation.signal.throwIfAborted()
           await this.api.Log(this.ctx, "Warning", `Could not insert dictation: ${String(error)}`).catch(() => {})
         } finally {
@@ -266,7 +361,6 @@ export class Controller {
       this.state = "idle"
       this.operation = undefined
       this.hotkeyActivation = ""
-      void this.engine.feedback("stop").catch(() => {})
       if (inserted || fallbackCopied) {
         await this.view.close()
         if (fallbackCopied) {
@@ -309,7 +403,10 @@ export class Controller {
   }
 
   async fail(error: unknown): Promise<void> {
+    const detail = String(error)
+    const microphone = detail.includes("MICROPHONE_UNAVAILABLE:")
     this.operation?.abort()
+    this.cancelWarmup()
     this.insertion.release(this.target)
     this.target = undefined
     this.operation = undefined
@@ -318,8 +415,18 @@ export class Controller {
     this.engine.dispose(`controller failure state=${this.state}`)
     await this.media.resume()
     this.state = "idle"
-    await this.view.update({ status: String(error), text: this.text, result: !!this.text }).catch(() => {})
-    await this.api.Notify(this.ctx, String(error))
+    let message = detail
+    if (microphone) {
+      void this.api.Log(this.ctx, "Warning", `Microphone error: ${detail}`).catch(() => {})
+      const threading = /RPC_E_CHANGED_MODE|2147417850|0x80010106/i.test(detail)
+      const key = threading ? "plugin_dictation_audio_init_failed" : "plugin_dictation_microphone_unavailable"
+      const fallback = threading ? "Could not initialize audio. Please try again; if the problem continues, restart Wox." : "Microphone unavailable. Check its connection and Dictation input device, then try again."
+      const translated = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
+      message = translated && translated !== key ? translated : fallback
+    }
+    if (microphone && !this.text) await this.view.close().catch(() => {})
+    else await this.view.update({ status: message, text: this.text, result: !!this.text }).catch(() => {})
+    await this.api.Notify(this.ctx, message)
   }
   async cancel(restoreFocus = false): Promise<void> {
     if (this.cancelTask) return this.cancelTask
@@ -332,6 +439,7 @@ export class Controller {
     this.targetPid = undefined
     this.state = "stopping"
     this.operation?.abort()
+    this.cancelWarmup()
     this.insertion.release(this.target)
     this.target = undefined
     this.operation = undefined
@@ -339,7 +447,7 @@ export class Controller {
     clearTimeout(this.maximum)
     if (state === "starting" || state === "stopping") this.engine.dispose(`controller cancel state=${state}`)
     const cancelEngine = state === "recording"
-      ? this.engine.cancel(this.store.settings.modelLoadMode === "eager").catch(() => this.engine.dispose("cancel failed"))
+      ? this.engine.cancel(this.store.settings.modelLoadMode !== "lazy", this.store.settings.keepMicrophoneReady !== "false").catch(() => this.engine.dispose("cancel failed"))
       : Promise.resolve()
     const closeWindow = async () => {
       await this.view.close()
@@ -352,6 +460,7 @@ export class Controller {
     } finally {
       await cancelEngine
       this.state = "idle"
+      if (state === "starting" || state === "stopping") this.warmup()
     }
   }
 }

@@ -80,7 +80,7 @@ export class Store {
   ) {}
 
   async load(): Promise<void> {
-    const keys = ["history", "dictionary", "actions", "model", "inputDevice", "defaultAIModel", "defaultAIRefineEnabled", "modelLoadMode", "playSound", "duckVolume"]
+    const keys = ["history", "dictionary", "actions", "model", "inputDevice", "keepMicrophoneReady", "defaultAIModel", "defaultAIRefineEnabled", "modelLoadMode", "playSound", "duckVolume"]
     const values = await Promise.all(keys.map(key => this.api.GetSetting(this.ctx, key)))
     const settings = Object.fromEntries(keys.map((key, i) => [key, values[i] || ""]))
     const history = JSON.parse(settings.history || "[]")

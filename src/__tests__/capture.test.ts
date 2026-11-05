@@ -112,7 +112,7 @@ test("starting capture starts the input stream and publishes microphone levels",
       const fatal = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("Timed out waiting for device error")), 5000)
         child.on("message", (message: { event?: string; data?: string }) => {
-          if (message.event === "error") { clearTimeout(timer); if (message.data === "device lost") resolve(); else reject(new Error(String(message.data))) }
+          if (message.event === "error") { clearTimeout(timer); if (message.data === "MICROPHONE_UNAVAILABLE: device lost") resolve(); else reject(new Error(String(message.data))) }
         })
       })
       child.send({ id: 3, method: "start", option: { modelPath: root, kind: "senseVoice", deviceId: "bad" } })

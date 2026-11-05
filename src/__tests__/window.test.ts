@@ -34,6 +34,8 @@ test("coalesces pre-ready state and reuses one HTML document", async () => {
   await view.show()
   expect(api.CreateWindow).toHaveBeenCalledTimes(1)
   expect(window.Show).toHaveBeenCalledWith(ctx, { Activate: true })
+  await view.show(false)
+  expect(window.Show).toHaveBeenLastCalledWith(ctx, { Activate: false })
   await view.update({ status: "Preparing", busy: true })
   await view.update({ status: "Listening", recording: true })
   await view.update({ status: "AI refining", busy: true })
@@ -44,6 +46,73 @@ test("coalesces pre-ready state and reuses one HTML document", async () => {
   expect(window.SetOptions).toHaveBeenLastCalledWith(ctx, { Width: 200, Height: 56 })
   await view.update({ status: "AI refining", busy: true })
   expect(window.SetOptions).toHaveBeenCalledTimes(2)
+})
+
+test("prepares once and hides the window between dictations", async () => {
+  const { view, api, window } = setup()
+  await view.prepare()
+  expect(window.Show).not.toHaveBeenCalled()
+  await view.show(false)
+  await view.close()
+  await view.show(false)
+  expect(window.Hide).toHaveBeenCalledTimes(1)
+  expect(window.Close).not.toHaveBeenCalled()
+  expect(api.CreateWindow).toHaveBeenCalledTimes(1)
+  await view.destroy()
+  expect(window.Close).toHaveBeenCalledTimes(1)
+})
+
+test("replays the latest state after a hidden document becomes available", async () => {
+  const { view, window, option } = setup()
+  await view.show()
+  await option().OnEvent!(ctx, { Type: "ready", WindowID: window.ID })
+  await view.close()
+  const post = jest.mocked(window.Content.PostMessage)
+  post.mockClear()
+  await view.update({ status: "Preparing", starting: true })
+  await view.update({ status: "Listening", recording: true })
+  expect(post).not.toHaveBeenCalled()
+  post.mockResolvedValueOnce({ Success: false, ErrMsg: "document unavailable" })
+    .mockResolvedValueOnce({ Success: false, ErrMsg: "document unavailable" })
+  await view.show(false)
+  expect(post).toHaveBeenCalledTimes(3)
+  expect(post).toHaveBeenLastCalledWith(ctx, { Data: { status: "Listening", recording: true } })
+  await view.destroy()
+})
+
+test("ignores a stale document failure after the window is hidden", async () => {
+  const { view, window, option } = setup()
+  await view.show()
+  await option().OnEvent!(ctx, { Type: "ready", WindowID: window.ID })
+  let finish!: () => void
+  jest.mocked(window.Content.PostMessage).mockImplementationOnce(() => new Promise(resolve => {
+    finish = () => resolve({ Success: false, ErrMsg: "document unavailable" })
+  }))
+  const update = view.update({ status: "Listening", recording: true })
+  while (!finish) await new Promise(resolve => setImmediate(resolve))
+  const hide = view.hide()
+  finish()
+  await expect(update).resolves.toBeUndefined()
+  await hide
+  await view.destroy()
+})
+
+test("a hide during delayed creation prevents a stale show", async () => {
+  const { view, api, window } = setup()
+  const create = jest.mocked(api.CreateWindow)
+  const original = create.getMockImplementation()!
+  let finish!: () => void
+  create.mockImplementation(async (...args) => {
+    await new Promise<void>(resolve => { finish = resolve })
+    return original(...args)
+  })
+  const showing = view.show(false)
+  while (!finish) await new Promise(resolve => setImmediate(resolve))
+  const hiding = view.close()
+  finish()
+  await Promise.all([showing, hiding])
+  expect(window.Show).not.toHaveBeenCalled()
+  await view.destroy()
 })
 
 test("stop callback does not block a subsequent cancel event", async () => {
@@ -70,7 +139,7 @@ test("old close events cannot cancel a new window", async () => {
   view.onCommand = command
   await view.show()
   const old = option()
-  await view.close()
+  await view.destroy()
   await view.show()
   await old.OnEvent!(ctx, { Type: "closed", WindowID: "window-1" })
   expect(command).not.toHaveBeenCalled()

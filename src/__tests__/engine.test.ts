@@ -17,7 +17,7 @@ async function setup() {
     stderr: new EventEmitter(),
     kill: jest.fn(),
     send: jest.fn((message: { id: number; method: string }) => {
-      if (message.method === "status" || message.method === "start") child.emit("message", { id: message.id, result: { version: "test" } })
+      if (message.method === "status" || message.method === "start" || message.method === "preload") child.emit("message", { id: message.id, result: { version: "test" } })
       if (message.method === "stop") child.emit("message", { id: message.id, result: { text: "hello" } })
       if (message.method === "stop-capture" || message.method === "sound" || message.method === "cancel") child.emit("message", { id: message.id, result: {} })
     })
@@ -41,7 +41,16 @@ test("tracks the loaded model until the recognition process is disposed", async 
   expect(engine.isModelLoaded(models[0])).toBe(false)
 })
 
-test("consecutive recordings reuse the process and show microphone preparation", async () => {
+test("preloading makes the model available and respects the idle timeout", async () => {
+  jest.useFakeTimers()
+  const { engine, child } = await setup()
+  await engine.preload(models[0], false)
+  expect(engine.isModelLoaded(models[0])).toBe(true)
+  jest.advanceTimersByTime(10 * 60 * 1000)
+  expect(child.kill).toHaveBeenCalledTimes(1)
+})
+
+  test("consecutive recordings reuse the process without a loading message", async () => {
   const { engine, child } = await setup()
   Object.assign(engine.downloads, { ready: jest.fn(async () => true), finishMigratedModel: jest.fn(async () => {}) })
   const api = { HideApp: jest.fn(async () => {}), GetTranslation: jest.fn(async () => "Processing"), SetSetting: jest.fn(async () => ({ Success: true })), Copy: jest.fn(async () => {}), Log: jest.fn(async () => {}) } as unknown as PublicAPI
@@ -55,7 +64,7 @@ test("consecutive recordings reuse the process and show microphone preparation",
   await controller.stop()
   jest.mocked(view.update).mockClear()
   await controller.start(action)
-  expect(view.update).toHaveBeenCalledWith({ status: "Preparing microphone…", busy: true })
+  expect(view.update).toHaveBeenCalledWith({ status: "Preparing…", starting: true, busy: true, level: 0 })
   expect(view.update).not.toHaveBeenCalledWith({ status: "Loading speech engine…", busy: true })
   expect(jest.mocked(api.Log).mock.calls.some(([, , message]) => message.includes("engine status") && message.includes("loaded=true"))).toBe(true)
   expect(jest.mocked(api.Log).mock.calls.some(([, , message]) => message.includes("engine reuse"))).toBe(true)
@@ -65,7 +74,7 @@ test("consecutive recordings reuse the process and show microphone preparation",
   expect(child.kill).not.toHaveBeenCalled()
   expect(engine.isModelLoaded(models[0])).toBe(true)
   await controller.start(action)
-  expect(view.update).toHaveBeenCalledWith({ status: "Preparing microphone…", busy: true })
+  expect(view.update).toHaveBeenCalledWith({ status: "Preparing…", starting: true, busy: true, level: 0 })
   await controller.cancel()
   engine.dispose()
 })

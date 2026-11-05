@@ -4,6 +4,7 @@ import { Controller } from "../controller"
 import { Downloads, models } from "../downloads"
 import * as downloads from "../downloads"
 import { Engine } from "../engine"
+import { DictationWindow } from "../window"
 
 const ctx = {} as Context
 const query = async (search: string) => await plugin.query(ctx, { Type: "input", Command: "", Search: search } as Query) as { Results: Result[] }
@@ -22,6 +23,8 @@ test("guides first-time users and restores background download progress after ch
   jest.spyOn(Engine.prototype, "prepare").mockResolvedValue()
   jest.spyOn(Engine.prototype, "request").mockResolvedValue([{ name: "Test microphone", deviceId: "mic" }])
   jest.spyOn(Engine.prototype, "dispose").mockImplementation(() => {})
+  jest.spyOn(Controller.prototype, "warmup").mockImplementation(() => {})
+  jest.spyOn(DictationWindow.prototype, "prepare").mockResolvedValue()
   let dynamic!: (context: Context, key: string) => Promise<{ Type: string; Value: { Options?: { Label: string; Value: string }[]; Key?: string }; IsPlatformSpecific?: boolean }>
   let changed!: (context: Context, key: string, value: string) => Promise<void>
   const api = {

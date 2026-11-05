@@ -70,6 +70,7 @@ export class Engine {
     child.once("error", failed)
     child.once("exit", code => failed(new Error(`Recognition process exited (${code}): ${stderr}`)))
     await this.request("status", {})
+    signal.throwIfAborted()
   }
 
   request<T = unknown>(method: string, option: Record<string, unknown>, timeout = 120000): Promise<T> {
@@ -89,27 +90,37 @@ export class Engine {
     })
   }
 
-  async start(model: Model, deviceId: string, playSound = false): Promise<void> {
+  async start(model: Model, deviceId: string, playSound = false, startedAt = Date.now(), preRoll = true, keepMicrophoneReady = true, traceId = "", traceStartedAt = Date.now()): Promise<void> {
     clearTimeout(this.idle)
     const child = this.child
     const started = Date.now()
-    await this.request("start", { modelPath: this.downloads.modelPath(model), kind: model.kind, deviceId, playSound })
+    await this.request("start", { modelPath: this.downloads.modelPath(model), kind: model.kind, deviceId, playSound, startedAt, preRoll, keepMicrophoneReady, traceId, traceStartedAt })
     if (this.child === child) this.loadedModel = model.id
     this.onEvent({ event: "diagnostic", data: `engine start completed pid=${child?.pid} model=${model.id} elapsedMs=${Date.now() - started} retained=${this.child === child}` })
+  }
+  async warmMicrophone(deviceId: string): Promise<void> {
+    await this.request("warm-microphone", { deviceId })
+  }
+  async preload(model: Model, keepLoaded: boolean): Promise<void> {
+    const child = this.child
+    await this.request("preload", { modelPath: this.downloads.modelPath(model), kind: model.kind })
+    if (this.child !== child) throw new Error("Recognition cancelled")
+    this.loadedModel = model.id
+    if (!keepLoaded) this.idle = setTimeout(() => this.dispose("idle timeout"), 10 * 60 * 1000)
   }
   isModelLoaded(model: Model): boolean {
     const loaded = !!this.child?.connected && this.loadedModel === model.id
     this.onEvent({ event: "diagnostic", data: `engine status pid=${this.child?.pid ?? "none"} connected=${!!this.child?.connected} loadedModel=${this.loadedModel ?? "none"} requestedModel=${model.id} loaded=${loaded}` })
     return loaded
   }
-  async feedback(sound: "start" | "stop"): Promise<void> {
-    await this.request("sound", { sound })
+  async feedback(sound: "start" | "stop", traceId = "", traceStartedAt = Date.now()): Promise<void> {
+    await this.request("sound", { sound, traceId, traceStartedAt })
   }
-  async stopCapture(): Promise<void> {
-    await this.request("stop-capture", {})
+  async stopCapture(keepMicrophoneReady = true): Promise<void> {
+    await this.request("stop-capture", { keepMicrophoneReady })
   }
-  async cancel(eager = false): Promise<void> {
-    await this.request("cancel", {}, 10000)
+  async cancel(eager = false, keepMicrophoneReady = true): Promise<void> {
+    await this.request("cancel", { keepMicrophoneReady }, 10000)
     this.onEvent({ event: "diagnostic", data: `engine cancel completed pid=${this.child?.pid ?? "none"} keepLoaded=${eager}` })
     if (!eager) this.idle = setTimeout(() => this.dispose("idle timeout"), 10 * 60 * 1000)
   }

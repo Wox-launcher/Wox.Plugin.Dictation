@@ -50,13 +50,22 @@ interface Sherpa {
 interface Request {
   id: number
   method: string
-  option: { modelPath?: string; kind?: string; deviceId?: string; path?: string; playSound?: boolean; sound?: "start" | "stop" }
+  option: { modelPath?: string; kind?: string; deviceId?: string; path?: string; playSound?: boolean; sound?: "start" | "stop"; startedAt?: number; preRoll?: boolean; keepMicrophoneReady?: boolean; traceId?: string; traceStartedAt?: number }
+  receivedAt?: number
 }
 const requireRuntime = createRequire(join(process.env.DICTATION_RUNTIME!, "entry.js"))
 const sherpa = requireRuntime("sherpa-onnx-node") as Sherpa
 const cpal = (requireRuntime("node-cpal") as { convenience: Microphone }).convenience
 let resampler: { resample(samples: Float32Array, flush?: boolean): Float32Array } | undefined
 let audio: AudioStream | undefined
+let audioDevice = ""
+let recording = false
+let keepMicrophoneReady = false
+let inputError: Error | undefined
+let inputGeneration = 0
+let lastInputAt = 0
+let recentAudio: { samples: Float32Array; end: number }[] = []
+let recentSamples = 0
 let captureStopped = false
 let recognizer: Recognizer | undefined
 let modelKey = ""
@@ -69,9 +78,22 @@ let sampleCount = 0
 let levelTime = 0
 let playSound = false
 let captureGap = false
+let soundOutput: { deviceId: string; config: { sampleRate: number; channels: number }; stream: Awaited<ReturnType<Microphone["createOutputStream"]>>; playing: boolean } | undefined
+let soundTasks = Promise.resolve()
+let soundIdle: NodeJS.Timeout | undefined
+let recordingTrace: { id: string; startedAt: number } | undefined
+let pipelineTrace: { id: string; startedAt: number } | undefined
+let segmentCount = 0
+let firstLiveAudio = false
 
 function emit(event: string, data: unknown): void {
   process.send?.({ event, data })
+}
+
+function timing(trace: { id: string; startedAt: number } | undefined, stage: string, details = ""): void {
+  if (!trace?.id) return
+  const now = Date.now()
+  emit("diagnostic", `[Dictation timing] session=${trace.id} stage=${stage} atMs=${now} elapsedMs=${now - trace.startedAt}${details ? ` ${details}` : ""}`)
 }
 
 // Async decoding leaves the audio callback free to drain its bounded native queue.
@@ -79,13 +101,19 @@ function drain(): void {
   while (vad && !vad.isEmpty()) {
     const samples = new Float32Array(vad.front(false).samples)
     vad.pop()
+    const queuedAt = Date.now(), trace = pipelineTrace, segment = ++segmentCount
     decoding = decoding
       .then(async () => {
-        const stream = recognizer!.createStream()
-        stream.acceptWaveform({ samples, sampleRate: 16000 })
-        const result = await recognizer!.decodeAsync(stream)
-        if (result.text.trim()) transcript.push(result.text.trim())
-        emit("partial", transcript.join(" "))
+        const startedAt = Date.now()
+        try {
+          const stream = recognizer!.createStream()
+          stream.acceptWaveform({ samples, sampleRate: 16000 })
+          const result = await recognizer!.decodeAsync(stream)
+          if (result.text.trim()) transcript.push(result.text.trim())
+          emit("partial", transcript.join(" "))
+        } finally {
+          timing(trace, "asr_segment_completed", `segment=${segment} audioMs=${Math.round(samples.length / 16)} queueMs=${startedAt - queuedAt} decodeMs=${Date.now() - startedAt}`)
+        }
       })
       .catch(error => {
         fatalError = error
@@ -142,6 +170,7 @@ function resetPipeline(option: Request["option"]): void {
   fatalError = undefined
   captureGap = false
   sampleCount = 0
+  segmentCount = 0
   levelTime = 0
   vad = new sherpa.Vad(
     {
@@ -156,6 +185,8 @@ function resetPipeline(option: Request["option"]): void {
 
 // Flush the partial VAD window and await every queued segment before returning the final text.
 async function finishPipeline(): Promise<{ text: string }> {
+  const startedAt = Date.now(), trace = pipelineTrace
+  timing(trace, "asr_flush_started")
   if (pending.length) {
     const tail = new Float32Array(512)
     tail.set(pending)
@@ -165,45 +196,187 @@ async function finishPipeline(): Promise<{ text: string }> {
   vad!.flush()
   drain()
   await decoding
+  timing(trace, "asr_flush_completed", `waitMs=${Date.now() - startedAt} segments=${segmentCount}`)
   if (fatalError) throw fatalError
   return { text: transcript.join(" ") }
 }
 
-// Feedback playback is optional; an unavailable speaker must not stop transcription.
-async function sound(name: "start" | "stop"): Promise<void> {
-  if (!playSound) return
-  let output: Awaited<ReturnType<Microphone["createOutputStream"]>> | undefined
-  try {
-    const wave = sherpa.readWave(join(__dirname, "sounds", `dictation_${name}.wav`))
-    const device = cpal.getDefaultOutputDevice(),
-      config = cpal.getDefaultOutputConfig(device.deviceId)
-    const mono = new sherpa.LinearResampler(wave.sampleRate, config.sampleRate).resample(wave.samples, true)
-    const samples = new Float32Array(mono.length * config.channels)
-    for (let i = 0; i < mono.length; i++) for (let ch = 0; ch < config.channels; ch++) samples[i * config.channels + ch] = mono[i]
-    output = await cpal.createOutputStream({ deviceId: device.deviceId, config: { ...config, sampleFormat: "f32" }, autoStart: false, onError: (error: Error) => emit("warning", error.message) })
-    if (!output.write(samples)) throw new Error("Feedback sound output queue is full")
-    output.play()
-    const deadline = Date.now() + (mono.length / config.sampleRate) * 1000 + 2000
-    while (output.bufferedFrames > 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
-    if (output.bufferedFrames > 0) throw new Error("Feedback sound output timed out")
-    await new Promise(resolve => setTimeout(resolve, 100))
-  } catch (error) {
-    emit("warning", `Feedback sound unavailable: ${String(error)}`)
-  } finally {
-    await output?.close()
+async function openMicrophoneOnce(deviceId = ""): Promise<boolean> {
+  const device = deviceId ? cpal.getDevices({ direction: "input" }).find(d => d.deviceId === deviceId) : cpal.getDefaultInputDevice()
+  if (!device) throw new Error("Selected microphone is unavailable")
+  if (audio && audioDevice === device.deviceId && !inputError && Date.now() - lastInputAt < 2000) return true
+  const generation = ++inputGeneration
+  if (audio) await audio.close()
+  audio = undefined
+  recentAudio = []
+  recentSamples = 0
+  inputError = undefined
+  const config = cpal.getDefaultInputConfig(device.deviceId)
+  resampler = new sherpa.LinearResampler(config.sampleRate, 16000)
+  let receivedAudio = false, ignoredInitialXrun = false
+  audio = await cpal.createInputStream({
+    deviceId: device.deviceId,
+    config: { ...config, sampleFormat: "f32" },
+    autoStart: true,
+    queueCapacityBuffers: 128,
+    onData(data) {
+      if (generation !== inputGeneration) return
+      try {
+        if (data.length) { receivedAudio = true; lastInputAt = Date.now() }
+        const mono = new Float32Array(Math.floor(data.length / config.channels))
+        for (let i = 0; i < mono.length; i++) for (let ch = 0; ch < config.channels; ch++) mono[i] += data[i * config.channels + ch] / config.channels
+        const samples = resampler!.resample(mono)
+        if (recording) {
+          if (!firstLiveAudio && samples.length) { firstLiveAudio = true; timing(recordingTrace, "first_live_audio") }
+          accept(samples)
+        }
+        else {
+          const end = Date.now()
+          recentAudio.push({ samples, end })
+          recentSamples += samples.length
+          while (recentAudio.length && (recentAudio[0].end < end - 5000 || recentSamples > 80000)) {
+            const first = recentAudio[0]
+            if (first.end >= end - 5000 && recentSamples - first.samples.length < 80000) {
+              const trim = recentSamples - 80000
+              first.samples = first.samples.slice(trim)
+              recentSamples -= trim
+              break
+            }
+            recentSamples -= recentAudio.shift()!.samples.length
+          }
+        }
+      } catch (error) {
+        inputError = error as Error
+        if (recording) { fatalError = inputError; emit("error", `MICROPHONE_UNAVAILABLE: ${String(error)}`) }
+        else emit("warning", `Microphone unavailable: ${String(error)}`)
+      }
+    },
+    onError(error) {
+      if (generation !== inputGeneration) return
+      if (error.code === "XRUN" || error.code === "INPUT_OVERFLOW") {
+        if (process.platform === "win32" && error.code === "XRUN" && !receivedAudio && !ignoredInitialXrun) {
+          ignoredInitialXrun = true
+          return
+        }
+        if (recording) {
+          if (!captureGap) emit("warning", `Audio capture interruption: ${error.message}`)
+          captureGap = true
+        }
+        return
+      }
+      inputError = error
+      if (recording) { fatalError = error; emit("error", `MICROPHONE_UNAVAILABLE: ${error.message}`) }
+      else emit("warning", `Microphone unavailable: ${error.message}`)
+    }
+  })
+  audioDevice = device.deviceId
+  if (!receivedAudio) lastInputAt = Date.now()
+  if (inputError) throw inputError
+  return false
+}
+
+async function openMicrophone(deviceId = "", retry = false): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await openMicrophoneOnce(deviceId)
+    } catch (error) {
+      const detail = String(error)
+      if (!retry || attempt >= 2 || /RPC_E_CHANGED_MODE|2147417850|0x80010106|permission|access denied/i.test(detail)) {
+        throw new Error(`MICROPHONE_UNAVAILABLE: ${detail}`)
+      }
+      emit("diagnostic", `Microphone open failed; retrying: ${detail}`)
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 150 : 300))
+    }
   }
+}
+
+// Serialize output changes independently of capture and recognition.
+function queueSound(task: () => Promise<void>): void {
+  soundTasks = soundTasks.then(task).catch(error => emit("warning", `Feedback sound unavailable: ${String(error)}`))
+}
+
+async function closeSoundOutput(): Promise<void> {
+  const output = soundOutput
+  soundOutput = undefined
+  if (output) await output.stream.close()
+}
+
+function sound(name: "start" | "stop", trace?: { id: string; startedAt: number }): void {
+  if (!playSound) { timing(trace, "sound_skipped", `kind=${name} reason=disabled`); return }
+  const queuedAt = Date.now()
+  timing(trace, "sound_queued", `kind=${name}`)
+  clearTimeout(soundIdle)
+  queueSound(async () => {
+    timing(trace, "sound_dequeued", `kind=${name} queueMs=${Date.now() - queuedAt}`)
+    clearTimeout(soundIdle)
+    try {
+      const device = cpal.getDefaultOutputDevice()
+      if (soundOutput && soundOutput.deviceId !== device.deviceId) {
+        const deadline = Date.now() + 2000
+        while (soundOutput.stream.bufferedFrames > 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+        await new Promise(resolve => setTimeout(resolve, 150))
+        await closeSoundOutput()
+      }
+      const reused = !!soundOutput
+      const openStarted = Date.now()
+      if (!soundOutput) {
+        const config = cpal.getDefaultOutputConfig(device.deviceId)
+        let failed = false
+        const stream = await cpal.createOutputStream({ deviceId: device.deviceId, config: { ...config, sampleFormat: "f32" }, autoStart: false, onError: (error: Error) => {
+          failed = true
+          emit("warning", `Feedback sound unavailable: ${error.message}`)
+          queueSound(async () => { if (soundOutput?.stream === stream) await closeSoundOutput() })
+        } })
+        if (failed) { await stream.close(); throw new Error("Audio output failed to open") }
+        soundOutput = { deviceId: device.deviceId, config, stream, playing: false }
+      }
+      timing(trace, "sound_device_ready", `kind=${name} reused=${reused} openMs=${Date.now() - openStarted}`)
+      const output = soundOutput
+      const { config, stream } = output
+      const wave = sherpa.readWave(join(__dirname, "sounds", `dictation_${name}.wav`))
+      const mono = new sherpa.LinearResampler(wave.sampleRate, config.sampleRate).resample(wave.samples, true)
+      const samples = new Float32Array(mono.length * config.channels)
+      for (let i = 0; i < mono.length; i++) for (let ch = 0; ch < config.channels; ch++) samples[i * config.channels + ch] = mono[i]
+      let written: boolean
+      try {
+        written = stream.write(samples)
+        if (written && !output.playing) {
+          stream.play()
+          output.playing = true
+        }
+      } catch (error) {
+        await closeSoundOutput()
+        throw error
+      }
+      if (!written) throw new Error("Feedback sound output queue is full")
+      timing(trace, "sound_submitted", `kind=${name} frames=${mono.length} sampleRate=${config.sampleRate}`)
+    } catch (error) {
+      timing(trace, "sound_failed", `kind=${name}`)
+      throw error
+    } finally {
+      if (soundOutput) {
+        soundIdle = setTimeout(() => queueSound(closeSoundOutput), 5 * 60 * 1000)
+        soundIdle.unref()
+      }
+    }
+  })
 }
 
 async function handle(request: Request): Promise<unknown> {
   const { method, option } = request
   if (method === "status") return { version: sherpa.version }
   if (method === "sound") {
-    if (option.sound === "start" || option.sound === "stop") void sound(option.sound).catch(error => emit("warning", `Feedback sound unavailable: ${String(error)}`))
+    if (option.sound === "start" || option.sound === "stop") sound(option.sound, { id: option.traceId || "", startedAt: option.traceStartedAt || Date.now() })
     return {}
   }
   if (method === "devices") return cpal.getDevices({ direction: "input" })
   if (method === "preload") {
     await load(option)
+    return {}
+  }
+  if (method === "warm-microphone") {
+    if (recording) throw new Error("Already recording")
+    await openMicrophone(option.deviceId)
     return {}
   }
   if (method === "decode") {
@@ -214,6 +387,7 @@ async function handle(request: Request): Promise<unknown> {
   }
   if (method === "decode-vad") {
     await load(option)
+    pipelineTrace = undefined
     resetPipeline(option)
     const wave = sherpa.readWave(option.path!)
     const converter = new sherpa.LinearResampler(wave.sampleRate, 16000)
@@ -222,77 +396,69 @@ async function handle(request: Request): Promise<unknown> {
     return finishPipeline()
   }
   if (method === "start") {
-    if (audio) throw new Error("Already recording")
+    const trace = { id: option.traceId || "", startedAt: option.traceStartedAt || Date.now() }
+    timing(trace, "worker_start_dequeued", `queueMs=${request.receivedAt ? Date.now() - request.receivedAt : 0}`)
+    if (recording || captureStopped) throw new Error("Already recording")
     await load(option)
+    timing(trace, "worker_model_ready")
+    pipelineTrace = trace
     resetPipeline(option)
+    timing(trace, "worker_vad_ready")
     captureStopped = false
     playSound = option.playSound === true
-    const device = option.deviceId ? cpal.getDevices({ direction: "input" }).find(d => d.deviceId === option.deviceId) : cpal.getDefaultInputDevice()
-    if (!device) throw new Error("Selected microphone is unavailable")
-    const config = cpal.getDefaultInputConfig(device.deviceId)
-    resampler = new sherpa.LinearResampler(config.sampleRate, 16000)
-    let receivedAudio = false, ignoredInitialXrun = false
-    audio = await cpal.createInputStream({
-      deviceId: device.deviceId,
-      config: { ...config, sampleFormat: "f32" },
-      autoStart: true,
-      queueCapacityBuffers: 128,
-      onData(data) {
-        try {
-          if (data.length) receivedAudio = true
-          const mono = new Float32Array(Math.floor(data.length / config.channels))
-          for (let i = 0; i < mono.length; i++) for (let ch = 0; ch < config.channels; ch++) mono[i] += data[i * config.channels + ch] / config.channels
-          accept(resampler!.resample(mono))
-        } catch (error) {
-          fatalError = error as Error
-          emit("error", String(error))
-        }
-      },
-      onError(error) {
-        if (error.code === "XRUN" || error.code === "INPUT_OVERFLOW") {
-          // WASAPI's discontinuity flag is undefined on its first capture buffer.
-          if (process.platform === "win32" && error.code === "XRUN" && !receivedAudio && !ignoredInitialXrun) {
-            ignoredInitialXrun = true
-            return
-          }
-          if (!captureGap) emit("warning", `Audio capture interruption: ${error.message}`)
-          captureGap = true
-          return
-        }
-        fatalError = error
-        emit("error", error.message)
-      }
-    })
+    keepMicrophoneReady = option.keepMicrophoneReady === true
+    const microphoneStarted = Date.now()
+    const reused = await openMicrophone(option.deviceId, true)
+    timing(trace, "microphone_ready", `reused=${reused} openMs=${Date.now() - microphoneStarted} bufferedMs=${Math.round(recentSamples / 16)}`)
+    if (inputError) throw inputError
+    recording = true
+    recordingTrace = trace
+    firstLiveAudio = false
+    sound("start", trace)
+    const now = Date.now()
+    const start = typeof option.startedAt === "number" && option.startedAt <= now && option.startedAt >= now - 5000 ? option.startedAt : now
+    const cutoff = start - (option.preRoll ? 450 : 0)
+    for (const chunk of recentAudio) {
+      const skip = Math.max(0, Math.min(chunk.samples.length, Math.floor((cutoff - (chunk.end - chunk.samples.length / 16)) * 16)))
+      if (skip < chunk.samples.length) accept(chunk.samples.subarray(skip))
+    }
+    recentAudio = []
+    recentSamples = 0
+    timing(trace, "worker_recording_ready")
     return {}
   }
   if (method === "stop-capture") {
-    if (!audio) throw new Error("Not recording")
-    await audio.close()
-    audio = undefined
+    if (!recording) throw new Error("Not recording")
+    recording = false
+    recordingTrace = undefined
+    if (option.keepMicrophoneReady === false) keepMicrophoneReady = false
+    if (!keepMicrophoneReady && audio) { await audio.close(); audio = undefined; recentAudio = []; recentSamples = 0 }
     captureStopped = true
     return {}
   }
   if (method === "cancel") {
-    if (!audio) throw new Error("Not recording")
-    await audio.close()
-    audio = undefined
+    if (!recording) throw new Error("Not recording")
+    recording = false
+    recordingTrace = undefined
+    if (option.keepMicrophoneReady === false) keepMicrophoneReady = false
+    if (!keepMicrophoneReady && audio) { await audio.close(); audio = undefined; recentAudio = []; recentSamples = 0 }
     captureStopped = false
     await decoding
     transcript = []
     pending = new Float32Array(0)
     vad = undefined
-    resampler = undefined
     return {}
   }
   if (method === "stop") {
-    if (audio) {
-      await audio.close()
-      audio = undefined
+    if (recording) {
+      recording = false
+      recordingTrace = undefined
+      if (!keepMicrophoneReady && audio) { await audio.close(); audio = undefined; recentAudio = []; recentSamples = 0 }
       captureStopped = true
     }
     if (!captureStopped) throw new Error("Not recording")
     captureStopped = false
-    accept(resampler!.resample(new Float32Array(0), true))
+    if (!keepMicrophoneReady) accept(resampler!.resample(new Float32Array(0), true))
     const result = await finishPipeline()
     if (captureGap) emit("capture_gap", null)
     return result
@@ -303,6 +469,7 @@ async function handle(request: Request): Promise<unknown> {
 // Serialize commands; cancellation is process termination so native inference cannot delay it.
 let commands = Promise.resolve()
 process.on("message", (request: Request) => {
+  request.receivedAt = Date.now()
   commands = commands.then(async () => {
     try {
       process.send?.({ id: request.id, result: await handle(request) })

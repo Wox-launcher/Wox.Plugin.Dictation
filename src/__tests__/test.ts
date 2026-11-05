@@ -2,6 +2,7 @@ import type { Context, PublicAPI, AI } from "@wox-launcher/wox-plugin"
 import { cleanTranscript, sanitize, expandPrompt, chat, refineInput } from "../refine"
 import { Store, defaultAction, normalizeActions, recentContext } from "../store"
 import { safeEntry, platformPackage, download, models } from "../downloads"
+import * as downloads from "../downloads"
 import { Controller } from "../controller"
 import type { Engine } from "../engine"
 import type { DictationWindow } from "../window"
@@ -158,6 +159,7 @@ function setupController() {
     downloads: { ready: jest.fn(async () => true), runtime: jest.fn(async () => "/runtime"), installModel: jest.fn(async () => {}), finishMigratedModel: jest.fn(async () => {}) },
     isModelLoaded: jest.fn(() => false),
     prepare: jest.fn(async () => {}),
+    warmMicrophone: jest.fn(async () => {}),
     start: jest.fn(async () => {}),
     stopCapture: jest.fn(async () => {}),
     cancel: jest.fn(async () => {}),
@@ -172,26 +174,31 @@ function setupController() {
 }
 
 describe("session lifecycle", () => {
-  test("no speech closes the recording window and shows a toast", async () => {
+  test("reports a disconnected microphone without exposing a technical error", async () => {
+    const { controller, engine, view, api } = setupController()
+    jest.mocked(engine.start).mockRejectedValue(new Error("MICROPHONE_UNAVAILABLE: device lost"))
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    expect(view.close).toHaveBeenCalled()
+    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Microphone unavailable"))
+    expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("device lost"))
+    expect(controller.state).toBe("idle")
+  })
+  test("explains Windows audio initialization errors separately", async () => {
+    const { controller, engine, api } = setupController()
+    jest.mocked(engine.start).mockRejectedValue(new Error("MICROPHONE_UNAVAILABLE: os error -2147417850"))
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Could not initialize audio"))
+    expect(api.GetTranslation).toHaveBeenCalledWith(ctx, "plugin_dictation_audio_init_failed")
+  })
+  test("no speech closes the recording window without a toast", async () => {
     const { controller, engine, view, store, api } = setupController()
     jest.mocked(engine.stop).mockResolvedValue("")
     await controller.start({ ...defaultAction, output: "clipboard" })
     await controller.stop()
     expect(view.close).toHaveBeenCalledTimes(1)
-    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: "No speech detected" })
-    expect(jest.mocked(view.close).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(api.ShowToastMsg).mock.invocationCallOrder[0])
+    expect(api.ShowToastMsg).not.toHaveBeenCalled()
     expect(engine.dispose).not.toHaveBeenCalled()
     expect(store.history).toEqual([])
-    expect(controller.state).toBe("idle")
-  })
-  test("a toast failure does not dispose the recognition engine", async () => {
-    const { controller, engine, api } = setupController()
-    jest.mocked(engine.stop).mockResolvedValue("")
-    jest.mocked(api.ShowToastMsg).mockResolvedValue({ Success: false, ErrMsg: "toast unavailable" })
-    await controller.start({ ...defaultAction, output: "clipboard" })
-    await controller.stop()
-    expect(engine.dispose).not.toHaveBeenCalled()
-    expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("toast unavailable"))
     expect(controller.state).toBe("idle")
   })
   test("a late waveform update failure after cancellation does not notify or dispose the engine", async () => {
@@ -278,13 +285,56 @@ describe("session lifecycle", () => {
     expect(engine.cancel).toHaveBeenCalledTimes(1)
     expect(engine.dispose).not.toHaveBeenCalled()
   })
-  test("uses a microphone preparation message when the model is already loaded", async () => {
+  test("does not show a loading message for a quick start", async () => {
     const { controller, engine, view } = setupController()
     jest.mocked(engine.isModelLoaded).mockReturnValue(true)
     await controller.start(defaultAction)
-    expect(view.update).toHaveBeenCalledWith({ status: "Preparing microphone…", busy: true })
+    expect(view.update).toHaveBeenCalledWith({ status: "Preparing…", starting: true, busy: true, level: 0 })
+    expect(view.update).not.toHaveBeenCalledWith({ status: "Preparing microphone…", busy: true })
     expect(view.update).not.toHaveBeenCalledWith({ status: "Loading speech engine…", busy: true })
     await controller.cancel()
+  })
+  test("starts microphone capture without waiting for a slow window", async () => {
+    const { controller, engine, view } = setupController()
+    let finish!: () => void
+    jest.mocked(view.show).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const starting = controller.start({ ...defaultAction, output: "clipboard" })
+    while (controller.state !== "recording") await new Promise(resolve => setImmediate(resolve))
+    expect(engine.start).toHaveBeenCalledTimes(1)
+    finish()
+    await starting
+    await controller.cancel()
+  })
+  test("slow microphone preparation eventually displays its status", async () => {
+    const { controller, engine, view } = setupController()
+    let finish!: () => void
+    jest.mocked(engine.start).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const starting = controller.start({ ...defaultAction, output: "clipboard" })
+    while (!finish) await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setTimeout(resolve, 850))
+    expect(view.update).toHaveBeenCalledWith({ status: "Loading speech engine…", busy: true })
+    finish()
+    await starting
+    await controller.cancel()
+  })
+  test("shares an in-progress background model warmup with the first recording", async () => {
+    const exists = jest.spyOn(downloads, "exists").mockResolvedValue(true)
+    const { controller, engine } = setupController()
+    Object.assign(engine.downloads, { runtimePath: () => "/runtime", modelPath: () => "/model" })
+    let finish!: () => void
+    jest.mocked(engine.prepare).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    Object.assign(engine, { preload: jest.fn(async () => {}) })
+    controller.warmup()
+    while (!finish) await new Promise(resolve => setImmediate(resolve))
+    const starting = controller.start({ ...defaultAction, output: "clipboard" })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(engine.start).not.toHaveBeenCalled()
+    finish()
+    await starting
+    expect(engine.preload).toHaveBeenCalledTimes(1)
+    expect(engine.start).toHaveBeenCalledTimes(1)
+    await controller.cancel()
+    exists.mockRestore()
   })
   test("a background model download does not block the dictation hotkey", async () => {
     const { controller, engine, store } = setupController()
@@ -348,7 +398,7 @@ describe("session lifecycle", () => {
     await controller.start(defaultAction, "", "", 123)
     await controller.stop()
     expect(capture).toHaveBeenCalledWith(123, expect.any(AbortSignal))
-    expect(insert).toHaveBeenCalledWith("1:2:123", "hello", expect.any(AbortSignal))
+    expect(insert).toHaveBeenCalledWith("1:2:123", "hello", expect.any(AbortSignal), expect.objectContaining({ id: expect.any(String) }))
     expect(jest.mocked(view.hide).mock.invocationCallOrder[0]).toBeLessThan(insert.mock.invocationCallOrder[0])
     expect(view.close).toHaveBeenCalled()
     expect(api.Copy).not.toHaveBeenCalled()
@@ -371,6 +421,71 @@ describe("session lifecycle", () => {
     expect(capture.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(view.show).mock.invocationCallOrder[0])
     expect(capture.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(api.HideApp).mock.invocationCallOrder[0])
     await controller.cancel()
+    capture.mockRestore()
+  })
+  test("shows the overlay without taking focus while input target capture is pending", async () => {
+    let finish!: (target: string) => void
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const { controller, view, api, engine } = setupController()
+    const starting = controller.start(defaultAction, "", "", 123)
+    while (!jest.mocked(view.show).mock.calls.length) await new Promise(resolve => setImmediate(resolve))
+    expect(view.show).toHaveBeenCalledWith(false)
+    expect(api.HideApp).not.toHaveBeenCalled()
+    expect(engine.start).toHaveBeenCalledTimes(1)
+    expect(controller.state).toBe("recording")
+    finish("1:2:123")
+    await starting
+    expect(view.show).toHaveBeenLastCalledWith()
+    await controller.cancel()
+    capture.mockRestore()
+  })
+  test("stopping closes the microphone while target capture is still pending", async () => {
+    let finish!: (target: string) => void
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const insert = jest.spyOn(TextInsert.prototype, "insert").mockResolvedValue(true)
+    const { controller, engine } = setupController()
+    const starting = controller.start(defaultAction, "", "", 123)
+    while (controller.state !== "recording") await new Promise(resolve => setImmediate(resolve))
+    const stopping = controller.stop()
+    while (!jest.mocked(engine.stopCapture).mock.calls.length) await new Promise(resolve => setTimeout(resolve, 10))
+    expect(insert).not.toHaveBeenCalled()
+    finish("1:2:123")
+    await Promise.all([starting, stopping])
+    expect(insert).toHaveBeenCalledWith("1:2:123", "hello", expect.any(AbortSignal), expect.objectContaining({ id: expect.any(String) }))
+    capture.mockRestore()
+    insert.mockRestore()
+  })
+  test("cancelling while target capture is pending releases a late target", async () => {
+    let finish!: (target: never) => void
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const release = jest.spyOn(TextInsert.prototype, "release")
+    const { controller, engine } = setupController()
+    const starting = controller.start(defaultAction, "", "", 123)
+    await controller.cancel()
+    const child = { kill: jest.fn() }
+    finish({ kind: "mac", child } as never)
+    await starting
+    await new Promise(resolve => setImmediate(resolve))
+    expect(release).toHaveBeenCalledWith(expect.objectContaining({ child }))
+    expect(child.kill).toHaveBeenCalled()
+    expect(engine.start).not.toHaveBeenCalled()
+    capture.mockRestore()
+    release.mockRestore()
+  })
+  test("a silent recording releases a target captured after it finishes", async () => {
+    let finish!: (target: never) => void
+    const capture = jest.spyOn(TextInsert.prototype, "capture").mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const { controller, engine } = setupController()
+    jest.mocked(engine.stop).mockResolvedValue("")
+    const starting = controller.start(defaultAction, "", "", 123)
+    while (controller.state !== "recording") await new Promise(resolve => setImmediate(resolve))
+    await controller.stop()
+    const child = { kill: jest.fn() }
+    finish({ kind: "mac", child } as never)
+    await starting
+    await new Promise(resolve => setImmediate(resolve))
+    expect(child.kill).toHaveBeenCalled()
+    expect(controller.state).toBe("idle")
     capture.mockRestore()
   })
   test("explains missing macOS Accessibility access when falling back to the clipboard", async () => {
@@ -403,7 +518,7 @@ describe("session lifecycle", () => {
     await controller.start(defaultAction)
     await controller.stop()
     expect(view.update).toHaveBeenLastCalledWith(expect.objectContaining({ result: true, text: "hello" }))
-    expect(view.show).toHaveBeenCalledTimes(2)
+    expect(view.show).toHaveBeenCalledTimes(3)
     expect(store.history[0].content).toBe("hello")
     expect(view.close).not.toHaveBeenCalled()
   })
@@ -416,9 +531,24 @@ describe("session lifecycle", () => {
     await controller.stop()
     expect(jest.mocked(api.InvokePluginTool).mock.calls.map(([, option]) => option.Name)).toEqual(["get_status", "pause", "play"])
     expect(jest.mocked(engine.stopCapture).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(api.InvokePluginTool).mock.invocationCallOrder[2])
-    expect(jest.mocked(api.InvokePluginTool).mock.invocationCallOrder[2]).toBeLessThan(jest.mocked(engine.stop).mock.invocationCallOrder[0])
     await controller.cancel()
     expect(api.InvokePluginTool).toHaveBeenCalledTimes(3)
+  })
+  test("slow media resume does not delay transcription or output", async () => {
+    const { controller, engine, store, api } = setupController()
+    store.settings.duckVolume = "true"
+    let finishResume!: () => void
+    jest.mocked(api.InvokePluginTool).mockImplementation(async (_ctx, option) => {
+      if (option.Name === "play") await new Promise<void>(resolve => { finishResume = resolve })
+      return { Output: { status: "playing" } }
+    })
+    await controller.start({ ...defaultAction, output: "overlay" })
+    const stopping = controller.stop()
+    while (!finishResume) await new Promise(resolve => setImmediate(resolve))
+    await stopping
+    expect(engine.stop).toHaveBeenCalledTimes(1)
+    expect(controller.state).toBe("idle")
+    finishResume()
   })
   test("does not resume media that was already paused", async () => {
     const { controller, store, api } = setupController()
@@ -461,15 +591,29 @@ describe("session lifecycle", () => {
     expect(jest.mocked(api.InvokePluginTool).mock.calls.map(([, option]) => option.Name)).toEqual(["get_status", "pause", "play"])
     expect(controller.state).toBe("idle")
   })
-  test("plays start feedback after recording starts and stop feedback after processing", async () => {
+  test("requests stop feedback after capture ends and before transcription finishes", async () => {
     const { controller, engine, store } = setupController()
     await controller.start(defaultAction)
-    expect(engine.feedback).toHaveBeenCalledWith("start")
-    expect(jest.mocked(engine.start).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(engine.feedback).mock.invocationCallOrder[0])
+    expect(engine.feedback).not.toHaveBeenCalled()
     await controller.stop()
     expect(store.history).toHaveLength(1)
-    expect(engine.feedback).toHaveBeenLastCalledWith("stop")
-    expect(jest.mocked(engine.stop).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(engine.feedback).mock.invocationCallOrder[1])
+    expect(engine.feedback).toHaveBeenLastCalledWith("stop", expect.any(String), expect.any(Number))
+    expect(jest.mocked(engine.stopCapture).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(engine.feedback).mock.invocationCallOrder[0])
+    expect(jest.mocked(engine.feedback).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(engine.stop).mock.invocationCallOrder[0])
+  })
+  test("correlates startup stages and sound with the same session without recording text", async () => {
+    const { controller, engine, api } = setupController()
+    const startedAt = Date.now() - 25
+    await controller.onHotkey({ SettingKey: "defaultHotkey", Kind: "normalCombo", Phase: "triggered", Hotkey: "ctrl+alt+d", ActivationID: "test", Timestamp: startedAt })
+    const args = jest.mocked(engine.start).mock.calls[0]
+    const traceId = args[6]
+    expect(traceId).toEqual(expect.any(String))
+    const logs = jest.mocked(api.Log).mock.calls.map(([, , message]) => message).filter(message => message.includes(`[Dictation timing] session=${traceId} `))
+    expect(logs.some(message => message.includes("stage=start_received") && message.includes("eventToPluginMs="))).toBe(true)
+    expect(logs.some(message => message.includes("stage=engine_start_requested"))).toBe(true)
+    expect(logs.some(message => message.includes("stage=recording_started"))).toBe(true)
+    expect(logs.every(message => !message.includes("ctrl+alt+d"))).toBe(true)
+    await controller.cancel()
   })
   test("hotkey release during model loading cancels and stale release cannot stop a new session", async () => {
     const { controller, engine } = setupController()
@@ -518,6 +662,7 @@ describe("session lifecycle", () => {
     )
     const first = controller.start(defaultAction)
     await expect(controller.start(defaultAction)).rejects.toThrow("busy")
+    while (!ready) await new Promise(resolve => setImmediate(resolve))
     ready(true)
     await first
     expect(engine.start).toHaveBeenCalledTimes(1)

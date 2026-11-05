@@ -75,8 +75,10 @@ async function modelResult(ctx: Context, model: (typeof models)[number], id: str
     async () => {
       if (await engine.downloads.ready(model)) {
         if (controller.state !== "idle") throw new Error("Stop dictation before changing models")
+        controller.cancelWarmup()
         engine.dispose("model selected")
         await store.set("model", model.id)
+        controller.warmup()
         await api.RefreshQuery(ctx, { PreserveSelectedIndex: true })
         return
       }
@@ -89,6 +91,7 @@ async function modelResult(ctx: Context, model: (typeof models)[number], id: str
         updateProgress(model.id)
       }).then(async () => {
         download = undefined
+        controller.warmup()
         await Promise.all(models.map(updateModel))
       }, async error => {
         download = undefined
@@ -104,6 +107,7 @@ async function modelResult(ctx: Context, model: (typeof models)[number], id: str
     PreventHideAfterAction: true,
     Action: guarded(ctx, async () => {
       if (controller.state !== "idle") throw new Error("Stop dictation first")
+      controller.cancelWarmup()
       engine.dispose("model deleted")
       await engine.downloads.removeModel(model)
       await api.RefreshQuery(ctx, { PreserveSelectedIndex: true })
@@ -136,7 +140,8 @@ export const plugin: Plugin = {
     store = new Store(api, ctx)
     await store.load()
     engine = new Engine(new Downloads(await api.GetCacheFolder(ctx)), params.PluginDirectory)
-    controller = new Controller(api, ctx, store, engine, new DictationWindow(api, ctx))
+    const view = new DictationWindow(api, ctx)
+    controller = new Controller(api, ctx, store, engine, view)
     await api.OnGetDynamicSetting(ctx, (async (_context: Context, key: string) => {
       if (key === "inputDevice") {
         let available: Device[] = []
@@ -171,12 +176,20 @@ export const plugin: Plugin = {
     }) as unknown as Parameters<PublicAPI["OnGetDynamicSetting"]>[1])
     await api.OnUnload(ctx, async () => {
       controller.cancelDownload()
+      controller.cancelWarmup()
       await controller.cancel()
+      controller.cancelWarmup()
       engine.dispose("plugin unload")
+      await view.destroy()
     })
     await api.OnSettingChanged(ctx, async (_context, key, value) => {
       try {
         store.changed(key, value)
+        if ((key === "model" || key === "inputDevice" || key === "keepMicrophoneReady") && controller.state === "idle") {
+          controller.cancelWarmup()
+          engine.dispose(`${key} changed`)
+          controller.warmup()
+        }
       } catch (error) {
         await api.Notify(ctx, String(error))
       }
@@ -209,6 +222,8 @@ export const plugin: Plugin = {
       Handler: async (_context, input) => ({ Output: { entries: store.history.filter(h => h.content.toLowerCase().includes(String(input.Arguments.search || "").toLowerCase())).slice(0, 20) } })
     })
     if (registration.Error) throw new Error(registration.Error.Message)
+    controller.warmup()
+    void view.prepare().catch(error => api.Log(ctx, "Warning", `Could not prepare dictation window: ${String(error)}`).catch(() => {}))
   },
   query: async (ctx: Context, query: Query) => {
     visibleModel = undefined

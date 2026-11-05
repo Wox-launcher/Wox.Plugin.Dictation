@@ -6,7 +6,7 @@
   "Name": "i18n:plugin_dictation_plugin_name",
   "Description": "i18n:plugin_dictation_plugin_description",
   "Author": "Wox Launcher",
-  "Version": "0.0.7",
+  "Version": "1.0.5",
   "MinWoxVersion": "2.5.0",
   "Runtime": "nodejs",
   "Website": "https://github.com/Wox-launcher/Wox.Plugin.Dictation",
@@ -40,6 +40,8 @@
   ],
   "I18n": {
     "en_US": {
+      "plugin_dictation_microphone_unavailable": "Microphone unavailable. Check its connection and Dictation input device, then try again.",
+      "plugin_dictation_audio_init_failed": "Could not initialize audio. Please try again; if the problem continues, restart Wox.",
       "plugin_dictation_plugin_name": "Dictation",
       "plugin_dictation_plugin_description": "Offline speech recognition with AI refinement and custom actions.",
       "plugin_dictation_insert_fallback": "Could not insert automatically. Copied to clipboard.",
@@ -49,6 +51,8 @@
       "plugin_dictation_hotkey_tooltip": "Hold a modifier key to record until release. A single press, double press, Caps Lock shortcut, or regular shortcut starts/stops recording.",
       "plugin_dictation_input_device": "Input device",
       "plugin_dictation_input_device_tooltip": "Select the microphone to use for dictation. System default uses the OS default input device.",
+      "plugin_dictation_keep_microphone": "Keep microphone ready",
+      "plugin_dictation_keep_microphone_tooltip": "Keep the microphone open for faster starts. Recent audio stays only in memory and may include up to 450 ms before the shortcut. Turn this off to release the microphone between recordings.",
       "plugin_dictation_input_device_requires_model": "Download a speech model to list available microphones.",
       "plugin_dictation_system_default": "System default",
       "plugin_dictation_input_device_unavailable": "Selected input device unavailable: {device}",
@@ -57,9 +61,9 @@
       "plugin_dictation_model": "Recognition model",
       "plugin_dictation_model_tooltip": "Select a downloaded speech recognition model. Download one from the prompt below if none is available.",
       "plugin_dictation_model_load_mode": "Model loading",
-      "plugin_dictation_model_load_mode_tooltip": "Lazy loading loads the model on first use and unloads it after 10 idle minutes. Keep loaded retains it after first use for faster subsequent recordings.",
-      "plugin_dictation_model_load_mode_lazy": "Lazy load (load on first use, unload after 10 minutes idle)",
-      "plugin_dictation_model_load_mode_eager": "Keep loaded (after first use)",
+      "plugin_dictation_model_load_mode_tooltip": "Installed models are prepared in the background. Automatic unload releases the model after 10 idle minutes; keep loaded retains it for faster recordings.",
+      "plugin_dictation_model_load_mode_lazy": "Automatic unload (after 10 minutes idle)",
+      "plugin_dictation_model_load_mode_eager": "Keep loaded",
       "plugin_dictation_model_error": "Model manager unavailable. Please restart Wox.",
       "plugin_dictation_no_model_download_prompt": "No model downloaded. Click here to download a recommended model.",
       "plugin_dictation_listening": "Listening...",
@@ -161,6 +165,8 @@
       "plugin_dictation_action_output_clipboard": "Clipboard"
     },
     "ja_JP": {
+      "plugin_dictation_microphone_unavailable": "マイクを使用できません。接続と音声入力の設定を確認してから、もう一度お試しください。",
+      "plugin_dictation_audio_init_failed": "音声を初期化できませんでした。再試行しても解決しない場合は、Woxを再起動してください。",
       "plugin_dictation_plugin_name": "ディクテーション",
       "plugin_dictation_plugin_description": "オフライン音声認識、AI 校正、カスタムアクション。",
       "plugin_dictation_insert_fallback": "自動入力できませんでした。クリップボードにコピーしました。",
@@ -169,6 +175,8 @@
       "plugin_dictation_hotkey_tooltip": "修飾キーを押し続けて録音し、離すと終了します。単押し、ダブル押し、Caps Lock または通常のショートカットで録音を開始・停止できます。",
       "plugin_dictation_input_device": "入力デバイス",
       "plugin_dictation_input_device_tooltip": "ディクテーションに使用するマイクを選択します。システムデフォルトは OS のデフォルト入力デバイスを使用します。",
+      "plugin_dictation_keep_microphone": "マイクを待機状態にする",
+      "plugin_dictation_keep_microphone_tooltip": "素早く開始するためマイクを開いたままにします。直近の音声はメモリ内にのみ保持され、ショートカット前の最大450ミリ秒を含む場合があります。オフにすると録音の間はマイクを解放します。",
       "plugin_dictation_input_device_requires_model": "Download a speech model to list available microphones.",
       "plugin_dictation_system_default": "システムデフォルト",
       "plugin_dictation_input_device_unavailable": "選択された入力デバイスが利用できません : {device}",
@@ -177,9 +185,9 @@
       "plugin_dictation_model": "認識モデル",
       "plugin_dictation_model_tooltip": "ダウンロードされた音声認識モデルを選択します。利用可能なものがない場合は、以下のプロンプトからダウンロードしてください。",
       "plugin_dictation_model_load_mode": "モデル読み込み",
-      "plugin_dictation_model_load_mode_tooltip": "遅延読み込みは初回使用時にモデルを読み込み、10 分間未使用で解放します。常駐モードは初回使用後もモデルを保持します。",
-      "plugin_dictation_model_load_mode_lazy": "遅延読み込み (初回使用時に読み込み、10分間アイドル後にアンロード)",
-      "plugin_dictation_model_load_mode_eager": "常駐（初回使用後に保持）",
+      "plugin_dictation_model_load_mode_tooltip": "インストール済みモデルはバックグラウンドで準備されます。自動解放は10分間未使用でモデルを解放し、常駐はモデルを保持します。",
+      "plugin_dictation_model_load_mode_lazy": "自動解放（10分間未使用後）",
+      "plugin_dictation_model_load_mode_eager": "常駐",
       "plugin_dictation_model_error": "モデルマネージャーが利用できません。Wox を再起動してください。",
       "plugin_dictation_no_model_download_prompt": "モデルがダウンロードされていません。クリックして推奨モデルをダウンロードしてください。",
       "plugin_dictation_listening": "聞き取り中...",
@@ -281,6 +289,8 @@
       "plugin_dictation_action_output_clipboard": "クリップボード"
     },
     "ko_KR": {
+      "plugin_dictation_microphone_unavailable": "마이크를 사용할 수 없습니다. 연결과 받아쓰기 입력 장치를 확인한 후 다시 시도하세요.",
+      "plugin_dictation_audio_init_failed": "오디오를 초기화할 수 없습니다. 다시 시도하고 문제가 계속되면 Wox를 다시 시작하세요.",
       "plugin_dictation_plugin_name": "받아쓰기",
       "plugin_dictation_plugin_description": "오프라인 음성 인식, AI 교정 및 사용자 지정 작업.",
       "plugin_dictation_insert_fallback": "자동으로 입력할 수 없어 클립보드에 복사했습니다.",
@@ -289,6 +299,8 @@
       "plugin_dictation_hotkey_tooltip": "보조 키를 누르고 있는 동안 녹음하며 놓으면 종료합니다. 한 번 누르기, 두 번 누르기, Caps Lock 조합 또는 일반 단축키로 녹음을 시작하거나 중지합니다.",
       "plugin_dictation_input_device": "입력 장치",
       "plugin_dictation_input_device_tooltip": "받아쓰기에 사용할 마이크를 선택합니다. 시스템 기본값은 OS 기본 입력 장치를 사용합니다.",
+      "plugin_dictation_keep_microphone": "마이크 준비 상태 유지",
+      "plugin_dictation_keep_microphone_tooltip": "빠른 시작을 위해 마이크를 열어 둡니다. 최근 오디오는 메모리에만 보관되며 단축키 입력 전 최대 450ms가 포함될 수 있습니다. 끄면 녹음 사이에 마이크를 해제합니다.",
       "plugin_dictation_input_device_requires_model": "Download a speech model to list available microphones.",
       "plugin_dictation_system_default": "시스템 기본값",
       "plugin_dictation_input_device_unavailable": "선택한 입력 장치를 사용할 수 없습니다: {device}",
@@ -297,9 +309,9 @@
       "plugin_dictation_model": "인식 모델",
       "plugin_dictation_model_tooltip": "다운로드한 음성 인식 모델을 선택합니다. 사용 가능한 모델이 없으면 아래 안내에서 다운로드해 주세요.",
       "plugin_dictation_model_load_mode": "모델 로드",
-      "plugin_dictation_model_load_mode_tooltip": "지연 로드는 처음 사용할 때 모델을 로드하고 10분간 사용하지 않으면 해제합니다. 상주 모드는 첫 사용 후 모델을 유지합니다.",
-      "plugin_dictation_model_load_mode_lazy": "지연 로드(첫 사용 시 로드, 10분 유휴 후 언로드)",
-      "plugin_dictation_model_load_mode_eager": "상주 (첫 사용 후 유지)",
+      "plugin_dictation_model_load_mode_tooltip": "설치된 모델은 백그라운드에서 준비됩니다. 자동 해제는 10분 동안 사용하지 않으면 모델을 해제하고, 상주 모드는 모델을 유지합니다.",
+      "plugin_dictation_model_load_mode_lazy": "자동 해제(10분간 사용하지 않을 때)",
+      "plugin_dictation_model_load_mode_eager": "상주",
       "plugin_dictation_model_error": "모델 관리자를 사용할 수 없습니다. Wox를 다시 시작해 주세요.",
       "plugin_dictation_no_model_download_prompt": "다운로드된 모델이 없습니다. 여기를 클릭하여 권장 모델을 다운로드합니다.",
       "plugin_dictation_listening": "듣는 중...",
@@ -401,6 +413,8 @@
       "plugin_dictation_action_output_clipboard": "클립보드"
     },
     "pt_BR": {
+      "plugin_dictation_microphone_unavailable": "Microfone indisponível. Verifique a conexão e o dispositivo de entrada do ditado e tente novamente.",
+      "plugin_dictation_audio_init_failed": "Não foi possível inicializar o áudio. Tente novamente; se o problema persistir, reinicie o Wox.",
       "plugin_dictation_loading_model": "Preparing dictation engine and recognition model...\nLoad time depends on your device performance. If it takes too long, try a smaller model.",
       "plugin_dictation_downloading_engine": "Downloading dictation engine (native libraries)...",
       "plugin_dictation_engine_download_failed": "Failed to download dictation engine",
@@ -409,9 +423,9 @@
       "plugin_dictation_engine_downloading": "Downloading engine",
       "plugin_dictation_engine_extracting": "Extracting engine",
       "plugin_dictation_model_load_mode": "Model loading",
-      "plugin_dictation_model_load_mode_tooltip": "O carregamento sob demanda carrega o modelo no primeiro uso e o libera após 10 minutos sem uso. O modo permanente mantém o modelo após o primeiro uso.",
-      "plugin_dictation_model_load_mode_lazy": "Lazy load (load on first use, unload after 10 minutes idle)",
-      "plugin_dictation_model_load_mode_eager": "Manter carregado após o primeiro uso",
+      "plugin_dictation_model_load_mode_tooltip": "Os modelos instalados são preparados em segundo plano. A liberação automática descarrega o modelo após 10 minutos sem uso; o modo permanente o mantém carregado.",
+      "plugin_dictation_model_load_mode_lazy": "Liberar após 10 minutos sem uso",
+      "plugin_dictation_model_load_mode_eager": "Manter carregado",
       "plugin_dictation_processing": "Processando ditado...",
       "plugin_dictation_hotkey_tooltip": "Segure uma tecla modificadora para gravar e solte para finalizar. Um toque, dois toques, um atalho com Caps Lock ou um atalho comum inicia e encerra a gravação.",
       "plugin_dictation_input_device_unavailable": "Dispositivo de entrada selecionado indisponível: {device}",
@@ -490,6 +504,8 @@
       "plugin_dictation_hotkey": "Atalho"
     },
     "ru_RU": {
+      "plugin_dictation_microphone_unavailable": "Микрофон недоступен. Проверьте подключение и выбранное устройство ввода, затем повторите попытку.",
+      "plugin_dictation_audio_init_failed": "Не удалось инициализировать аудио. Повторите попытку; если ошибка не исчезнет, перезапустите Wox.",
       "plugin_dictation_loading_model": "Preparing dictation engine and recognition model...\nLoad time depends on your device performance. If it takes too long, try a smaller model.",
       "plugin_dictation_downloading_engine": "Downloading dictation engine (native libraries)...",
       "plugin_dictation_engine_download_failed": "Failed to download dictation engine",
@@ -498,9 +514,9 @@
       "plugin_dictation_engine_downloading": "Downloading engine",
       "plugin_dictation_engine_extracting": "Extracting engine",
       "plugin_dictation_model_load_mode": "Model loading",
-      "plugin_dictation_model_load_mode_tooltip": "Ленивая загрузка загружает модель при первом использовании и выгружает после 10 минут простоя. Постоянный режим сохраняет её после первого использования.",
-      "plugin_dictation_model_load_mode_lazy": "Lazy load (load on first use, unload after 10 minutes idle)",
-      "plugin_dictation_model_load_mode_eager": "Сохранять в памяти после первого использования",
+      "plugin_dictation_model_load_mode_tooltip": "Установленные модели подготавливаются в фоновом режиме. Автоматическая выгрузка освобождает модель после 10 минут простоя; постоянный режим сохраняет её в памяти.",
+      "plugin_dictation_model_load_mode_lazy": "Выгружать после 10 минут простоя",
+      "plugin_dictation_model_load_mode_eager": "Сохранять в памяти",
       "plugin_dictation_processing": "Обработка диктовки...",
       "plugin_dictation_hotkey_tooltip": "Удерживайте клавишу-модификатор для записи и отпустите для завершения. Одиночное или двойное нажатие, сочетание с Caps Lock или обычное сочетание запускает и останавливает запись.",
       "plugin_dictation_input_device_unavailable": "Выбранное устройство ввода недоступно: {device}",
@@ -579,6 +595,8 @@
       "plugin_dictation_hotkey": "Горячая клавиша"
     },
     "zh_CN": {
+      "plugin_dictation_microphone_unavailable": "麦克风暂不可用，请检查连接和听写输入设备后重试。",
+      "plugin_dictation_audio_init_failed": "音频初始化失败，请重试；如果问题持续出现，请重启 Wox。",
       "plugin_dictation_plugin_name": "听写",
       "plugin_dictation_plugin_description": "离线语音识别、AI 润色与自定义动作。",
       "plugin_dictation_insert_fallback": "无法自动插入，已复制到剪贴板。",
@@ -588,6 +606,8 @@
       "plugin_dictation_hotkey_tooltip": "按住修饰键录音，松开结束。单击、双击修饰键、Caps Lock 组合键或常规组合键可开始或停止录音。",
       "plugin_dictation_input_device": "输入设备",
       "plugin_dictation_input_device_tooltip": "选择用于听写的麦克风。系统默认使用操作系统的默认输入设备。",
+      "plugin_dictation_keep_microphone": "保持麦克风就绪",
+      "plugin_dictation_keep_microphone_tooltip": "保持麦克风开启以便快速开始。最近的音频只保存在内存中，听写可能包含按下快捷键前最多 450 毫秒的声音。关闭后，麦克风会在录音间隙释放。",
       "plugin_dictation_input_device_requires_model": "下载语音模型后可选择麦克风。",
       "plugin_dictation_system_default": "系统默认",
       "plugin_dictation_input_device_unavailable": "已选择的输入设备不可用：{device}",
@@ -596,9 +616,9 @@
       "plugin_dictation_model": "识别模型",
       "plugin_dictation_model_tooltip": "选择已下载的语音识别模型。如果没有可用模型，请在下方提示中下载。",
       "plugin_dictation_model_load_mode": "模型加载方式",
-      "plugin_dictation_model_load_mode_tooltip": "延迟加载在首次使用时加载模型，空闲 10 分钟后卸载。常驻模式在首次使用后保留模型，加快后续录音启动。",
-      "plugin_dictation_model_load_mode_lazy": "懒加载（首次使用时加载，空闲 10 分钟后卸载）",
-      "plugin_dictation_model_load_mode_eager": "常驻（首次使用后保留模型）",
+      "plugin_dictation_model_load_mode_tooltip": "已安装的模型会在后台预热。自动卸载会在空闲 10 分钟后释放模型；常驻模式会保留模型以加快录音启动。",
+      "plugin_dictation_model_load_mode_lazy": "自动卸载（空闲 10 分钟后）",
+      "plugin_dictation_model_load_mode_eager": "常驻",
       "plugin_dictation_model_error": "模型管理器不可用，请重启 Wox。",
       "plugin_dictation_no_model_download_prompt": "尚未下载模型。点击此处下载推荐模型。",
       "plugin_dictation_listening": "正在听写...",
@@ -724,7 +744,7 @@
       "Value": {
         "Key": "modelLoadMode",
         "Label": "i18n:plugin_dictation_model_load_mode",
-        "DefaultValue": "lazy",
+        "DefaultValue": "eager",
         "Options": [
           {
             "Label": "i18n:plugin_dictation_model_load_mode_lazy",
@@ -743,6 +763,16 @@
       "IsPlatformSpecific": true,
       "Value": {
         "Key": "inputDevice"
+      }
+    },
+    {
+      "Type": "checkbox",
+      "IsPlatformSpecific": true,
+      "Value": {
+        "Key": "keepMicrophoneReady",
+        "Label": "i18n:plugin_dictation_keep_microphone",
+        "DefaultValue": "true",
+        "Tooltip": "i18n:plugin_dictation_keep_microphone_tooltip"
       }
     },
     {
