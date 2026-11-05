@@ -1,5 +1,5 @@
 {
-  "version": "0.0.6",
+  "version": "0.0.7",
   "engines": {
     "node": ">=22"
   },
@@ -12,7 +12,7 @@
     "@types/node": "^24.6.1",
     "@types/unbzip2-stream": "^1.4.3",
     "@vercel/ncc": "^0.38.1",
-    "@wox-launcher/wox-plugin": "0.0.146",
+    "@wox-launcher/wox-plugin": "0.0.148",
     "babel-plugin-transform-import-meta": "^2.2.1",
     "eslint": "^9.25.0",
     "jest": "^29.7.0",
