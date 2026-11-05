@@ -1,16 +1,22 @@
 {
   "Id": "eaadbcea-c907-4efe-b09b-dfc56e1dc758",
-  "TriggerKeywords": ["dictate"],
+  "TriggerKeywords": [
+    "dictate"
+  ],
   "Name": "i18n:plugin_dictation_plugin_name",
   "Description": "i18n:plugin_dictation_plugin_description",
   "Author": "Wox Launcher",
-  "Version": "1.0.2",
+  "Version": "0.0.7",
   "MinWoxVersion": "2.5.0",
   "Runtime": "nodejs",
   "Website": "https://github.com/Wox-launcher/Wox.Plugin.Dictation",
   "Entry": "index.js",
   "Icon": "relative:images/app.svg",
-  "SupportedOS": ["windows", "linux", "darwin"],
+  "SupportedOS": [
+    "windows",
+    "linux",
+    "darwin"
+  ],
   "Features": [
     {
       "Name": "ai"
@@ -703,7 +709,13 @@
         "Label": "i18n:plugin_dictation_hotkey",
         "DefaultValue": "",
         "Scope": "global",
-        "AllowedHotkeyKinds": ["normalCombo", "doubleModifier", "capsLockCombo", "pressModifier", "holdModifier"],
+        "AllowedHotkeyKinds": [
+          "normalCombo",
+          "doubleModifier",
+          "capsLockCombo",
+          "pressModifier",
+          "holdModifier"
+        ],
         "Tooltip": "i18n:plugin_dictation_hotkey_tooltip"
       }
     },
@@ -729,7 +741,9 @@
     {
       "Type": "dynamic",
       "IsPlatformSpecific": true,
-      "Value": { "Key": "inputDevice" }
+      "Value": {
+        "Key": "inputDevice"
+      }
     },
     {
       "Type": "checkbox",
@@ -769,7 +783,9 @@
     },
     {
       "Type": "dynamic",
-      "Value": { "Key": "dictionary" }
+      "Value": {
+        "Key": "dictionary"
+      }
     },
     {
       "Type": "table",
@@ -789,7 +805,13 @@
             "Label": "i18n:plugin_dictation_action_hotkey",
             "Type": "hotkey",
             "Scope": "global",
-            "AllowedHotkeyKinds": ["normalCombo", "doubleModifier", "capsLockCombo", "pressModifier", "holdModifier"],
+            "AllowedHotkeyKinds": [
+              "normalCombo",
+              "doubleModifier",
+              "capsLockCombo",
+              "pressModifier",
+              "holdModifier"
+            ],
             "Tooltip": "i18n:plugin_dictation_action_hotkey_tooltip"
           },
           {
