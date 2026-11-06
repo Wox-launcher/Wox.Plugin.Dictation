@@ -6,7 +6,7 @@
   "Name": "i18n:plugin_dictation_plugin_name",
   "Description": "i18n:plugin_dictation_plugin_description",
   "Author": "Wox Launcher",
-  "Version": "1.0.5",
+  "Version": "1.1.0",
   "MinWoxVersion": "2.5.0",
   "Runtime": "nodejs",
   "Website": "https://github.com/Wox-launcher/Wox.Plugin.Dictation",
@@ -48,7 +48,7 @@
       "plugin_dictation_insert_accessibility": "Copied to clipboard. Allow Accessibility access for Wox and its Node.js runtime in System Settings, then try again.",
       "plugin_dictation_settings_head": "Dictation Settings",
       "plugin_dictation_hotkey": "Hotkey",
-      "plugin_dictation_hotkey_tooltip": "Hold a modifier key to record until release. A single press, double press, Caps Lock shortcut, or regular shortcut starts/stops recording.",
+      "plugin_dictation_hotkey_tooltip": "Hold a modifier key, Delete, Insert, or a supported function key to record until release. A single press, double press, Caps Lock shortcut, or regular shortcut starts/stops recording.",
       "plugin_dictation_input_device": "Input device",
       "plugin_dictation_input_device_tooltip": "Select the microphone to use for dictation. System default uses the OS default input device.",
       "plugin_dictation_keep_microphone": "Keep microphone ready",
@@ -172,7 +172,7 @@
       "plugin_dictation_insert_fallback": "自動入力できませんでした。クリップボードにコピーしました。",
       "plugin_dictation_settings_head": "ディクテーション設定",
       "plugin_dictation_hotkey": "ホットキー",
-      "plugin_dictation_hotkey_tooltip": "修飾キーを押し続けて録音し、離すと終了します。単押し、ダブル押し、Caps Lock または通常のショートカットで録音を開始・停止できます。",
+      "plugin_dictation_hotkey_tooltip": "修飾キー、Delete、Insert、または対応するファンクションキーを押し続けて録音し、離すと終了します。単押し、ダブル押し、Caps Lock または通常のショートカットで録音を開始・停止できます。",
       "plugin_dictation_input_device": "入力デバイス",
       "plugin_dictation_input_device_tooltip": "ディクテーションに使用するマイクを選択します。システムデフォルトは OS のデフォルト入力デバイスを使用します。",
       "plugin_dictation_keep_microphone": "マイクを待機状態にする",
@@ -296,7 +296,7 @@
       "plugin_dictation_insert_fallback": "자동으로 입력할 수 없어 클립보드에 복사했습니다.",
       "plugin_dictation_settings_head": "받아쓰기 설정",
       "plugin_dictation_hotkey": "단축키",
-      "plugin_dictation_hotkey_tooltip": "보조 키를 누르고 있는 동안 녹음하며 놓으면 종료합니다. 한 번 누르기, 두 번 누르기, Caps Lock 조합 또는 일반 단축키로 녹음을 시작하거나 중지합니다.",
+      "plugin_dictation_hotkey_tooltip": "보조 키, Delete, Insert 또는 지원되는 기능 키를 누르고 있는 동안 녹음하며 놓으면 종료합니다. 한 번 누르기, 두 번 누르기, Caps Lock 조합 또는 일반 단축키로 녹음을 시작하거나 중지합니다.",
       "plugin_dictation_input_device": "입력 장치",
       "plugin_dictation_input_device_tooltip": "받아쓰기에 사용할 마이크를 선택합니다. 시스템 기본값은 OS 기본 입력 장치를 사용합니다.",
       "plugin_dictation_keep_microphone": "마이크 준비 상태 유지",
@@ -427,7 +427,7 @@
       "plugin_dictation_model_load_mode_lazy": "Liberar após 10 minutos sem uso",
       "plugin_dictation_model_load_mode_eager": "Manter carregado",
       "plugin_dictation_processing": "Processando ditado...",
-      "plugin_dictation_hotkey_tooltip": "Segure uma tecla modificadora para gravar e solte para finalizar. Um toque, dois toques, um atalho com Caps Lock ou um atalho comum inicia e encerra a gravação.",
+      "plugin_dictation_hotkey_tooltip": "Segure uma tecla modificadora, Delete, Insert ou uma tecla de função compatível para gravar e solte para finalizar. Um toque, dois toques, um atalho com Caps Lock ou um atalho comum inicia e encerra a gravação.",
       "plugin_dictation_input_device_unavailable": "Dispositivo de entrada selecionado indisponível: {device}",
       "plugin_dictation_input_device_missing": "Dispositivo de entrada selecionado não encontrado: {device}. Conecte o dispositivo ou escolha Padrão do sistema nas configurações de Ditado.",
       "plugin_dictation_input_device_list_failed": "Falha ao listar dispositivos de entrada",
@@ -518,7 +518,7 @@
       "plugin_dictation_model_load_mode_lazy": "Выгружать после 10 минут простоя",
       "plugin_dictation_model_load_mode_eager": "Сохранять в памяти",
       "plugin_dictation_processing": "Обработка диктовки...",
-      "plugin_dictation_hotkey_tooltip": "Удерживайте клавишу-модификатор для записи и отпустите для завершения. Одиночное или двойное нажатие, сочетание с Caps Lock или обычное сочетание запускает и останавливает запись.",
+      "plugin_dictation_hotkey_tooltip": "Удерживайте клавишу-модификатор, Delete, Insert или поддерживаемую функциональную клавишу для записи и отпустите для завершения. Одиночное или двойное нажатие, сочетание с Caps Lock или обычное сочетание запускает и останавливает запись.",
       "plugin_dictation_input_device_unavailable": "Выбранное устройство ввода недоступно: {device}",
       "plugin_dictation_input_device_missing": "Выбранное устройство ввода не найдено: {device}. Подключите устройство или выберите системное по умолчанию в настройках диктовки.",
       "plugin_dictation_input_device_list_failed": "Не удалось получить список устройств ввода",
@@ -603,7 +603,7 @@
       "plugin_dictation_insert_accessibility": "已复制到剪贴板。请在系统设置的辅助功能中允许 Wox 及其 Node.js 运行时，然后重试。",
       "plugin_dictation_settings_head": "听写设置",
       "plugin_dictation_hotkey": "快捷键",
-      "plugin_dictation_hotkey_tooltip": "按住修饰键录音，松开结束。单击、双击修饰键、Caps Lock 组合键或常规组合键可开始或停止录音。",
+      "plugin_dictation_hotkey_tooltip": "按住修饰键、Delete、Insert 或支持的功能键录音，松开结束。单击、双击修饰键、Caps Lock 组合键或常规组合键可开始或停止录音。",
       "plugin_dictation_input_device": "输入设备",
       "plugin_dictation_input_device_tooltip": "选择用于听写的麦克风。系统默认使用操作系统的默认输入设备。",
       "plugin_dictation_keep_microphone": "保持麦克风就绪",
@@ -734,7 +734,8 @@
           "doubleModifier",
           "capsLockCombo",
           "pressModifier",
-          "holdModifier"
+          "holdModifier",
+          "holdKey"
         ],
         "Tooltip": "i18n:plugin_dictation_hotkey_tooltip"
       }
@@ -840,7 +841,8 @@
               "doubleModifier",
               "capsLockCombo",
               "pressModifier",
-              "holdModifier"
+              "holdModifier",
+              "holdKey"
             ],
             "Tooltip": "i18n:plugin_dictation_action_hotkey_tooltip"
           },

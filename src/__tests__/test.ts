@@ -1,4 +1,4 @@
-import type { Context, PublicAPI, AI } from "@wox-launcher/wox-plugin"
+import type { Context, PublicAPI, AI, HotkeyEvent } from "@wox-launcher/wox-plugin"
 import { cleanTranscript, sanitize, expandPrompt, chat, refineInput } from "../refine"
 import { Store, defaultAction, normalizeActions, recentContext } from "../store"
 import { safeEntry, platformPackage, download, models } from "../downloads"
@@ -50,6 +50,14 @@ describe("transcript safety", () => {
 })
 
 describe("durable settings", () => {
+  test("default and action shortcuts both allow standalone hold keys", async () => {
+    const metadata = JSON.parse(await readFile(join(process.cwd(), "plugin.json"), "utf8"))
+    const defaultHotkey = metadata.SettingDefinitions.find((item: { Value?: { Key?: string } }) => item.Value?.Key === "defaultHotkey")
+    const actions = metadata.SettingDefinitions.find((item: { Value?: { Key?: string } }) => item.Value?.Key === "actions")
+    const actionHotkey = actions.Value.Columns.find((column: { Key: string }) => column.Key === "hotkey")
+    expect(defaultHotkey.Value.AllowedHotkeyKinds).toContain("holdKey")
+    expect(actionHotkey.AllowedHotkeyKinds).toContain("holdKey")
+  })
   test("dictionary table changes supply preferred spellings to AI refinement", async () => {
     const { store, values } = setupStore()
     values.dictionary = JSON.stringify([{ id: "old", phrase: " Wox " }])
@@ -265,6 +273,61 @@ describe("session lifecycle", () => {
     expect(store.history).toEqual([])
     expect(engine.dispose).not.toHaveBeenCalled()
   })
+  test("cancelling from the window requests one stop cue without waiting for it", async () => {
+    const { controller, engine, view } = setupController()
+    let finishSound!: () => void
+    jest.mocked(engine.feedback).mockImplementation(() => new Promise(resolve => { finishSound = resolve }))
+    await controller.start({ ...defaultAction, output: "clipboard" })
+    const cancelling = view.onCommand("cancel")
+    await controller.cancel()
+    await cancelling
+    expect(engine.feedback).toHaveBeenCalledTimes(1)
+    expect(engine.feedback).toHaveBeenCalledWith("stop", expect.any(String), expect.any(Number))
+    expect(jest.mocked(engine.feedback).mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(engine.cancel).mock.invocationCallOrder[0])
+    expect(controller.state).toBe("idle")
+    finishSound()
+  })
+  test("cancelling during the trailing capture plays the cue once", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, view } = setupController()
+      await controller.start({ ...defaultAction, output: "overlay" })
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(100)
+      await view.onCommand("cancel")
+      await jest.advanceTimersByTimeAsync(150)
+      await stopping
+      expect(engine.feedback).toHaveBeenCalledTimes(1)
+      expect(engine.feedback).toHaveBeenCalledWith("stop", expect.any(String), expect.any(Number))
+      expect(engine.cancel).toHaveBeenCalledTimes(1)
+      expect(engine.stopCapture).not.toHaveBeenCalled()
+    } finally { jest.useRealTimers() }
+  })
+  test("cancelling while the microphone is closing does not repeat the stop cue", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, view } = setupController()
+      let finishCapture!: () => void
+      jest.mocked(engine.stopCapture).mockImplementation(() => new Promise(resolve => { finishCapture = resolve }))
+      await controller.start({ ...defaultAction, output: "overlay" })
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      expect(finishCapture).toBeDefined()
+      await view.onCommand("cancel")
+      finishCapture()
+      await stopping
+      expect(engine.feedback).toHaveBeenCalledTimes(1)
+      expect(engine.cancel).toHaveBeenCalledTimes(1)
+      expect(engine.stop).not.toHaveBeenCalled()
+    } finally { jest.useRealTimers() }
+  })
+  test("closing a completed result does not play a second stop cue", async () => {
+    const { controller, engine, view } = setupController()
+    await controller.start({ ...defaultAction, output: "overlay" })
+    await controller.stop()
+    await view.onCommand("cancel")
+    expect(engine.feedback).toHaveBeenCalledTimes(1)
+  })
   test("a failed recording cancellation disposes the engine", async () => {
     const { controller, engine } = setupController()
     jest.mocked(engine.cancel).mockRejectedValue(new Error("capture failed"))
@@ -369,27 +432,155 @@ describe("session lifecycle", () => {
     finishDownload()
     await downloading
   })
-  test("shows recognition, AI refinement and custom AI processing while each stage runs", async () => {
-    const { controller, engine, store, view, api } = setupController()
-    store.settings.defaultAIRefineEnabled = "true"
-    store.settings.defaultAIModel = JSON.stringify({ Provider: "test", Name: "test" })
-    let finishRecognition!: (text: string) => void
-    jest.mocked(engine.stop).mockImplementation(() => new Promise(resolve => { finishRecognition = resolve }))
-    const callbacks: AI.ChatStreamFunc[] = []
-    api.AIChatStream = jest.fn(async (_ctx, _model, _messages, _option, callback) => { callbacks.push(callback) })
-    await controller.start({ ...defaultAction, type: "custom", prompt: "{wox:dictation_text}", output: "overlay" })
-    const stopping = controller.stop()
-    while (!finishRecognition) await new Promise(resolve => setImmediate(resolve))
-    expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_processing", busy: true })
-    finishRecognition("hello")
-    while (callbacks.length < 1) await new Promise(resolve => setImmediate(resolve))
-    expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_ai_refining", busy: true })
-    callbacks[0]({ Status: "finished", Data: "Hello." } as AI.ChatStreamData)
-    while (callbacks.length < 2) await new Promise(resolve => setImmediate(resolve))
-    expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_action_ai_processing", busy: true })
-    callbacks[1]({ Status: "finished", Data: "Done" } as AI.ChatStreamData)
-    await stopping
-    expect(store.history[0].content).toBe("Done")
+  test("does not flash a processing message when recognition finishes quickly", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, view } = setupController()
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      await stopping
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(view.update).not.toHaveBeenCalledWith(expect.objectContaining({ busy: true }))
+      expect(view.update).toHaveBeenCalledWith(expect.objectContaining({ result: true, text: "hello" }))
+    } finally { jest.useRealTimers() }
+  })
+  test("does not show a processing message when recognition and AI both finish quickly", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, store, view, api } = setupController()
+      store.settings.defaultAIRefineEnabled = "true"
+      store.settings.defaultAIModel = JSON.stringify({ Provider: "test", Name: "test" })
+      api.AIChatStream = jest.fn(async (_ctx, _model, _messages, _option, callback) => {
+        callback({ Status: "finished", Data: "Hello." } as AI.ChatStreamData)
+      })
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      await stopping
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(view.update).not.toHaveBeenCalledWith(expect.objectContaining({ busy: true }))
+      expect(view.update).toHaveBeenCalledWith(expect.objectContaining({ result: true, text: "Hello." }))
+    } finally { jest.useRealTimers() }
+  })
+  test("shows the current processing stage only after the delay", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, store, view, api } = setupController()
+      store.settings.defaultAIRefineEnabled = "true"
+      store.settings.defaultAIModel = JSON.stringify({ Provider: "test", Name: "test" })
+      let finishRecognition!: (text: string) => void
+      jest.mocked(engine.stop).mockImplementation(() => new Promise(resolve => { finishRecognition = resolve }))
+      const callbacks: AI.ChatStreamFunc[] = []
+      api.AIChatStream = jest.fn(async (_ctx, _model, _messages, _option, callback) => { callbacks.push(callback) })
+      await controller.start({ ...defaultAction, type: "custom", prompt: "{wox:dictation_text}", output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      expect(engine.stop).toHaveBeenCalled()
+      await jest.advanceTimersByTimeAsync(499)
+      expect(view.update).not.toHaveBeenCalledWith(expect.objectContaining({ busy: true }))
+      await jest.advanceTimersByTimeAsync(1)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_processing", busy: true })
+      finishRecognition("hello")
+      await jest.advanceTimersByTimeAsync(0)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_ai_refining", busy: true })
+      callbacks[0]({ Status: "finished", Data: "Hello." } as AI.ChatStreamData)
+      await jest.advanceTimersByTimeAsync(0)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_action_ai_processing", busy: true })
+      callbacks[1]({ Status: "finished", Data: "Done" } as AI.ChatStreamData)
+      await stopping
+      expect(store.history[0].content).toBe("Done")
+    } finally { jest.useRealTimers() }
+  })
+  test("a quick recognition followed by slow AI shows the AI stage rather than stale recognition", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, store, view, api } = setupController()
+      store.settings.defaultAIRefineEnabled = "true"
+      store.settings.defaultAIModel = JSON.stringify({ Provider: "test", Name: "test" })
+      let finish!: AI.ChatStreamFunc
+      api.AIChatStream = jest.fn(async (_ctx, _model, _messages, _option, callback) => { finish = callback })
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      expect(finish).toBeDefined()
+      await jest.advanceTimersByTimeAsync(500)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_ai_refining", busy: true })
+      expect(view.update).not.toHaveBeenCalledWith({ status: "plugin_dictation_processing", busy: true })
+      finish({ Status: "finished", Data: "Hello." } as AI.ChatStreamData)
+      await stopping
+    } finally { jest.useRealTimers() }
+  })
+  test("a late translation cannot restore processing after the result is ready", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, view, api } = setupController()
+      let finishRecognition!: (text: string) => void
+      let finishTranslation!: (text: string) => void
+      jest.mocked(engine.stop).mockImplementation(() => new Promise(resolve => { finishRecognition = resolve }))
+      jest.mocked(api.GetTranslation).mockImplementation((_ctx, key) => key === "plugin_dictation_processing"
+        ? new Promise(resolve => { finishTranslation = resolve }) : Promise.resolve(key))
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(750)
+      expect(finishTranslation).toBeDefined()
+      finishRecognition("hello")
+      await stopping
+      finishTranslation("Processing…")
+      await jest.advanceTimersByTimeAsync(0)
+      expect(view.update).not.toHaveBeenCalledWith({ status: "Processing…", busy: true })
+      expect(view.update).toHaveBeenLastCalledWith(expect.objectContaining({ result: true, text: "hello" }))
+    } finally { jest.useRealTimers() }
+  })
+  test("an old translation cannot replace the current AI processing stage", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, store, view, api } = setupController()
+      store.settings.defaultAIRefineEnabled = "true"
+      store.settings.defaultAIModel = JSON.stringify({ Provider: "test", Name: "test" })
+      let finishRecognition!: (text: string) => void
+      let finishTranslation!: (text: string) => void
+      let finishAI!: AI.ChatStreamFunc
+      jest.mocked(engine.stop).mockImplementation(() => new Promise(resolve => { finishRecognition = resolve }))
+      jest.mocked(api.GetTranslation).mockImplementation((_ctx, key) => key === "plugin_dictation_processing"
+        ? new Promise(resolve => { finishTranslation = resolve }) : Promise.resolve(key))
+      api.AIChatStream = jest.fn(async (_ctx, _model, _messages, _option, callback) => { finishAI = callback })
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(750)
+      finishRecognition("hello")
+      await jest.advanceTimersByTimeAsync(0)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_ai_refining", busy: true })
+      finishTranslation("Old recognition status")
+      await jest.advanceTimersByTimeAsync(0)
+      expect(view.update).toHaveBeenLastCalledWith({ status: "plugin_dictation_ai_refining", busy: true })
+      finishAI({ Status: "finished", Data: "Hello." } as AI.ChatStreamData)
+      await stopping
+    } finally { jest.useRealTimers() }
+  })
+  test("cancellation before the delay prevents a later processing message", async () => {
+    jest.useFakeTimers()
+    try {
+      const { controller, engine, view } = setupController()
+      let finishRecognition!: (text: string) => void
+      jest.mocked(engine.stop).mockImplementation(() => new Promise(resolve => { finishRecognition = resolve }))
+      await controller.start({ ...defaultAction, output: "overlay" })
+      jest.mocked(view.update).mockClear()
+      const stopping = controller.stop()
+      await jest.advanceTimersByTimeAsync(250)
+      await controller.cancel()
+      await jest.advanceTimersByTimeAsync(1000)
+      finishRecognition("hello")
+      await stopping
+      expect(view.update).not.toHaveBeenCalledWith(expect.objectContaining({ busy: true }))
+      expect(view.update).not.toHaveBeenCalledWith(expect.objectContaining({ result: true }))
+    } finally { jest.useRealTimers() }
   })
   test("inserts into the captured target and closes the overlay on success", async () => {
     const capture = jest.spyOn(TextInsert.prototype, "capture").mockResolvedValue("1:2:123")
@@ -615,7 +806,10 @@ describe("session lifecycle", () => {
     expect(logs.every(message => !message.includes("ctrl+alt+d"))).toBe(true)
     await controller.cancel()
   })
-  test("hotkey release during model loading cancels and stale release cannot stop a new session", async () => {
+  test.each([
+    ["holdModifier", "hold:right_alt"],
+    ["holdKey", "hold:delete"]
+  ])("%s release during model loading cancels and stale release cannot stop a new session", async (kind, hotkey) => {
     const { controller, engine } = setupController()
     let ready!: (value: boolean) => void
     jest.mocked(engine.downloads.ready).mockImplementationOnce(
@@ -624,7 +818,7 @@ describe("session lifecycle", () => {
           ready = resolve
         })
     )
-    const event = { SettingKey: "defaultHotkey", Kind: "holdModifier" as const, Phase: "started" as const, Hotkey: "hold:right_alt", ActivationID: "first", Timestamp: 1 }
+    const event = { SettingKey: "defaultHotkey", Kind: kind, Phase: "started" as const, Hotkey: hotkey, ActivationID: "first", Timestamp: 1 } as HotkeyEvent
     const first = controller.onHotkey(event)
     while (!ready) await new Promise(resolve => setImmediate(resolve))
     await controller.onHotkey({ ...event, Phase: "ended", EndReason: "released" })

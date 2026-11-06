@@ -10,6 +10,7 @@ import { MediaPause } from "./media"
 import { TextInsert, type InputTarget } from "./insert"
 
 export type State = "idle" | "starting" | "recording" | "stopping" | "processing"
+const processingIndicatorDelay = 500
 export class Controller {
   state: State = "idle"
   private operation?: AbortController
@@ -24,6 +25,7 @@ export class Controller {
   private readonly insertion: TextInsert
   private target?: InputTarget
   private captureTask?: Promise<void>
+  private captureStopping?: AbortController
   private warmupOperation?: AbortController
   private warmupTask?: Promise<void>
   private targetPid?: number
@@ -32,12 +34,6 @@ export class Controller {
   private timing(trace: { id: string; startedAt: number }, stage: string, details = ""): void {
     const now = Date.now()
     void this.api.Log(this.ctx, "Info", `[Dictation timing] session=${trace.id} stage=${stage} atMs=${now} elapsedMs=${now - trace.startedAt}${details ? ` ${details}` : ""}`).catch(() => {})
-  }
-  private async showProcessing(operation: AbortController, key: string, fallback: string): Promise<void> {
-    const status = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
-    operation.signal.throwIfAborted()
-    await this.view.update({ status: status || fallback, busy: true })
-    operation.signal.throwIfAborted()
   }
   constructor(
     readonly api: PublicAPI,
@@ -246,12 +242,40 @@ export class Controller {
     const operation = this.operation,
       action = this.action!
     this.state = "stopping"
+    this.captureStopping = operation
     clearTimeout(this.maximum)
+    let processingTimer: NodeJS.Timeout | undefined
+    let processingActive = true
+    let processingVisible = false
+    let statusRevision = 0
+    let processingStatus = { key: "plugin_dictation_processing", fallback: "Processing dictation…" }
+    const finishProcessing = () => { processingActive = false; clearTimeout(processingTimer) }
+    const publishProcessing = async () => {
+      const revision = statusRevision
+      const { key, fallback } = processingStatus
+      const status = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
+      if (!processingActive || operation.signal.aborted || this.operation !== operation || revision !== statusRevision) return
+      await this.view.update({ status: status || fallback, busy: true })
+    }
+    const updateProcessing = (key: string, fallback: string) => {
+      processingStatus = { key, fallback }
+      statusRevision++
+      if (processingVisible) void publishProcessing().catch(reportProcessingError)
+    }
+    const reportProcessingError = (error: unknown) => {
+      if (processingActive && !operation.signal.aborted && this.operation === operation) void this.fail(error).catch(() => {})
+    }
     try {
       await new Promise(resolve => setTimeout(resolve, 250))
       operation.signal.throwIfAborted()
-      await this.showProcessing(operation, "plugin_dictation_processing", "Processing dictation…")
+      processingTimer = setTimeout(() => {
+        if (!processingActive || operation.signal.aborted || this.operation !== operation) return
+        processingVisible = true
+        void publishProcessing().catch(reportProcessingError)
+      }, processingIndicatorDelay)
       await this.engine.stopCapture(this.store.settings.keepMicrophoneReady !== "false")
+      operation.signal.throwIfAborted()
+      if (this.captureStopping === operation) this.captureStopping = undefined
       if (trace) this.timing(trace, "capture_stopped")
       void this.engine.feedback("stop", trace?.id, trace?.startedAt).catch(() => {})
       if (trace) this.timing(trace, "media_resume_requested")
@@ -278,7 +302,7 @@ export class Controller {
         try {
           if (trace) this.timing(trace, "ai_refine_started")
           const model = parseModel(this.store.actions[0].model || this.store.settings.defaultAIModel)
-          await this.showProcessing(operation, "plugin_dictation_ai_refining", "Refining with AI…")
+          updateProcessing("plugin_dictation_ai_refining", "Refining with AI…")
           const refined = await chat(
             this.api,
             this.ctx,
@@ -300,7 +324,7 @@ export class Controller {
         try {
           if (trace) this.timing(trace, "action_ai_started")
           const model = parseModel(action.model || this.store.settings.defaultAIModel)
-          await this.showProcessing(operation, "plugin_dictation_action_ai_processing", "Processing with AI…")
+          updateProcessing("plugin_dictation_action_ai_processing", "Processing with AI…")
           text = await chat(
             this.api,
             this.ctx,
@@ -324,6 +348,7 @@ export class Controller {
       await this.store.addHistory(text, original)
       if (trace) this.timing(trace, "history_save_completed")
       operation.signal.throwIfAborted()
+      finishProcessing()
       if (trace) this.timing(trace, "output_ready")
       let inserted = false
       if (action.output === "input") {
@@ -379,7 +404,11 @@ export class Controller {
       })
       if (action.output === "input") await this.view.show()
     } catch (error) {
+      finishProcessing()
       if (!operation.signal.aborted) await this.fail(error)
+    } finally {
+      if (this.captureStopping === operation) this.captureStopping = undefined
+      finishProcessing()
     }
   }
 
@@ -435,6 +464,9 @@ export class Controller {
   }
   private async cancelSession(restoreFocus: boolean): Promise<void> {
     const state = this.state
+    const operation = this.operation
+    const cancellingCapture = !!operation && (state === "recording" || (state === "stopping" && this.captureStopping === operation))
+    const trace = this.trace
     const targetPid = this.targetPid
     this.targetPid = undefined
     this.state = "stopping"
@@ -445,8 +477,9 @@ export class Controller {
     this.operation = undefined
     this.hotkeyActivation = ""
     clearTimeout(this.maximum)
-    if (state === "starting" || state === "stopping") this.engine.dispose(`controller cancel state=${state}`)
-    const cancelEngine = state === "recording"
+    if (cancellingCapture) void this.engine.feedback("stop", trace?.id, trace?.startedAt).catch(() => {})
+    if (state === "starting" || (state === "stopping" && !cancellingCapture)) this.engine.dispose(`controller cancel state=${state}`)
+    const cancelEngine = cancellingCapture
       ? this.engine.cancel(this.store.settings.modelLoadMode !== "lazy", this.store.settings.keepMicrophoneReady !== "false").catch(() => this.engine.dispose("cancel failed"))
       : Promise.resolve()
     const closeWindow = async () => {
@@ -460,7 +493,7 @@ export class Controller {
     } finally {
       await cancelEngine
       this.state = "idle"
-      if (state === "starting" || state === "stopping") this.warmup()
+      if (state === "starting" || (state === "stopping" && !cancellingCapture)) this.warmup()
     }
   }
 }

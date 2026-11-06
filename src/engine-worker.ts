@@ -437,7 +437,7 @@ async function handle(request: Request): Promise<unknown> {
     return {}
   }
   if (method === "cancel") {
-    if (!recording) throw new Error("Not recording")
+    if (!recording && !captureStopped) throw new Error("Not recording")
     recording = false
     recordingTrace = undefined
     if (option.keepMicrophoneReady === false) keepMicrophoneReady = false
