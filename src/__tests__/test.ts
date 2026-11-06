@@ -21,7 +21,6 @@ function setupStore() {
       values[option.Key] = option.Value
       return { Success: true }
     }),
-    Notify: jest.fn(async () => {}),
     ShowToastMsg: jest.fn(async () => ({ Success: true, ErrMsg: "" })),
     GetTranslation: jest.fn(async (_ctx, key: string) => key),
     Log: jest.fn(async () => {}),
@@ -182,12 +181,29 @@ function setupController() {
 }
 
 describe("session lifecycle", () => {
+  test("a missing model shows only a toast without opening the dictation window", async () => {
+    const { controller, engine, view, api } = setupController()
+    jest.mocked(engine.downloads.ready).mockResolvedValue(false)
+    const capture = jest.spyOn(TextInsert.prototype, "capture")
+    try {
+      await controller.start(defaultAction, "", "activation", 123, true)
+      expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: "Error: Download a speech model first: dictate model" })
+      expect(view.show).not.toHaveBeenCalled()
+      expect(view.update).not.toHaveBeenCalled()
+      expect(api.HideApp).not.toHaveBeenCalled()
+      expect(capture).not.toHaveBeenCalled()
+      expect(engine.start).not.toHaveBeenCalled()
+      expect(controller.state).toBe("idle")
+    } finally {
+      capture.mockRestore()
+    }
+  })
   test("reports a disconnected microphone without exposing a technical error", async () => {
     const { controller, engine, view, api } = setupController()
     jest.mocked(engine.start).mockRejectedValue(new Error("MICROPHONE_UNAVAILABLE: device lost"))
     await controller.start({ ...defaultAction, output: "clipboard" })
     expect(view.close).toHaveBeenCalled()
-    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Microphone unavailable"))
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: expect.stringContaining("Microphone unavailable") })
     expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("device lost"))
     expect(controller.state).toBe("idle")
   })
@@ -195,7 +211,7 @@ describe("session lifecycle", () => {
     const { controller, engine, api } = setupController()
     jest.mocked(engine.start).mockRejectedValue(new Error("MICROPHONE_UNAVAILABLE: os error -2147417850"))
     await controller.start({ ...defaultAction, output: "clipboard" })
-    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Could not initialize audio"))
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: expect.stringContaining("Could not initialize audio") })
     expect(api.GetTranslation).toHaveBeenCalledWith(ctx, "plugin_dictation_audio_init_failed")
   })
   test("no speech closes the recording window without a toast", async () => {
@@ -220,7 +236,7 @@ describe("session lifecycle", () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(engine.cancel).toHaveBeenCalledTimes(1)
     expect(engine.dispose).not.toHaveBeenCalled()
-    expect(api.Notify).not.toHaveBeenCalled()
+    expect(api.ShowToastMsg).not.toHaveBeenCalled()
     expect(controller.state).toBe("idle")
   })
   test("a stale waveform failure cannot cancel a new recording", async () => {
@@ -234,7 +250,7 @@ describe("session lifecycle", () => {
     rejectUpdate(new Error("window closed"))
     await new Promise(resolve => setImmediate(resolve))
     expect(engine.dispose).not.toHaveBeenCalled()
-    expect(api.Notify).not.toHaveBeenCalled()
+    expect(api.ShowToastMsg).not.toHaveBeenCalled()
     expect(controller.state).toBe("recording")
     await controller.cancel()
   })
@@ -245,7 +261,7 @@ describe("session lifecycle", () => {
     engine.onEvent({ event: "level", data: 0.5 })
     await new Promise(resolve => setImmediate(resolve))
     expect(engine.dispose).toHaveBeenCalledWith("controller failure state=recording")
-    expect(api.Notify).toHaveBeenCalledWith(ctx, "Error: window update failed")
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: "Error: window update failed" })
   })
   test("cancelling from the window restores the original app after closing it", async () => {
     const restore = jest.spyOn(TextInsert.prototype, "restoreFocus").mockResolvedValue()
@@ -652,6 +668,7 @@ describe("session lifecycle", () => {
     const release = jest.spyOn(TextInsert.prototype, "release")
     const { controller, engine } = setupController()
     const starting = controller.start(defaultAction, "", "", 123)
+    await Promise.resolve()
     await controller.cancel()
     const child = { kill: jest.fn() }
     finish({ kind: "mac", child } as never)
@@ -687,7 +704,7 @@ describe("session lifecycle", () => {
     expect(api.Copy).toHaveBeenCalledWith(ctx, { type: "text", text: "hello" })
     expect(api.Log).toHaveBeenCalledWith(ctx, "Warning", expect.stringContaining("macOS Accessibility permission is required"))
     expect(api.GetTranslation).toHaveBeenCalledWith(ctx, "plugin_dictation_insert_accessibility")
-    expect(api.Notify).toHaveBeenCalledWith(ctx, expect.stringContaining("Allow Accessibility access"))
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: expect.stringContaining("Allow Accessibility access") })
     capture.mockRestore()
   })
   test("copies the transcript and shows a notification if insertion fails", async () => {
@@ -697,7 +714,7 @@ describe("session lifecycle", () => {
     await controller.start(defaultAction, "", "", 123)
     await controller.stop()
     expect(api.Copy).toHaveBeenCalledWith(ctx, { type: "text", text: "hello" })
-    expect(api.Notify).toHaveBeenCalledWith(ctx, "plugin_dictation_insert_fallback")
+    expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: "plugin_dictation_insert_fallback" })
     expect(store.history[0].content).toBe("hello")
     expect(view.close).toHaveBeenCalled()
     capture.mockRestore()
@@ -926,7 +943,7 @@ describe("session lifecycle", () => {
     await controller.start(defaultAction)
     await controller.stop()
     expect(store.history[0].content).toBe("hello")
-    expect(api.Notify).toHaveBeenCalled()
+    expect(api.ShowToastMsg).toHaveBeenCalled()
   })
   test("silence does not create history", async () => {
     const { controller, engine, store } = setupController()

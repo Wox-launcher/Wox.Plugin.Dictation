@@ -32,7 +32,7 @@ test("guides first-time users and restores background download progress after ch
     CreateWindow: jest.fn(), OnHotkey: jest.fn(async () => ({ Success: true })),
     OnUnload: jest.fn(), OnSettingChanged: jest.fn(async (_ctx, callback) => { changed = callback }),
     OnGetDynamicSetting: jest.fn(async (_ctx, callback) => { dynamic = callback }), OnMRURestore: jest.fn(), OnDeepLink: jest.fn(),
-    RegisterPluginTool: jest.fn(async () => ({})), ChangeQuery: jest.fn(), UpdateResult: jest.fn(async () => true), Notify: jest.fn(),
+    RegisterPluginTool: jest.fn(async () => ({})), ChangeQuery: jest.fn(), UpdateResult: jest.fn(async () => true), ShowToastMsg: jest.fn(),
     SetSetting: jest.fn(async () => ({ Success: true })), RefreshQuery: jest.fn()
   } as unknown as PublicAPI
   await plugin.init(ctx, { API: api, PluginDirectory: "" } as never)

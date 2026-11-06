@@ -18,7 +18,7 @@ function guarded(ctx: Context, work: () => Promise<void>): () => Promise<void> {
     try {
       await work()
     } catch (error) {
-      await api.Notify(ctx, String(error))
+      await api.ShowToastMsg(ctx, { Message: String(error) })
     }
   }
 }
@@ -96,7 +96,7 @@ async function modelResult(ctx: Context, model: (typeof models)[number], id: str
       }, async error => {
         download = undefined
         await updateModel(model)
-        await api.Notify(ctx, `Model download failed: ${String(error)}`)
+        await api.ShowToastMsg(ctx, { Message: `Model download failed: ${String(error)}` })
       }).catch(() => {})
     })
   result.Id = id
@@ -191,7 +191,7 @@ export const plugin: Plugin = {
           controller.warmup()
         }
       } catch (error) {
-        await api.Notify(ctx, String(error))
+        await api.ShowToastMsg(ctx, { Message: String(error) })
       }
     })
     const hotkeys = await api.OnHotkey(ctx, { Callback: (context, event) => guarded(context, () => controller.onHotkey(event))() })

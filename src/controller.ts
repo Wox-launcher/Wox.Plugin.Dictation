@@ -56,7 +56,7 @@ export class Controller {
     engine.onEvent = event => {
       if (event.event === "diagnostic") void api.Log(ctx, "Info", `[Dictation engine] ${String(event.data)}`).catch(() => {})
       if (event.event === "warning") void api.Log(ctx, "Warning", String(event.data)).catch(() => {})
-      if (event.event === "capture_gap") void api.Notify(ctx, "Audio capture was interrupted; the transcript may be missing some words.").catch(() => {})
+      if (event.event === "capture_gap") void api.ShowToastMsg(ctx, { Message: "Audio capture was interrupted; the transcript may be missing some words." }).catch(() => {})
       if (event.event === "limit") void this.stop().catch(error => this.fail(error))
       if (event.event === "error" && this.operation && !this.operation.signal.aborted) void this.fail(event.data)
       if (event.event === "partial" && this.state === "recording") this.text = String(event.data)
@@ -156,17 +156,27 @@ export class Controller {
     }) : Promise.resolve(undefined)
     let startupMessage = this.engine.isModelLoaded(model) ? "Preparing microphone…" : "Loading speech engine…"
     let showStartupMessage = false
-    const startupTimer = setTimeout(() => {
-      if (this.operation !== operation || this.state !== "starting" || operation.signal.aborted) return
-      showStartupMessage = true
-      void this.view.update({ status: startupMessage, busy: true }).catch(() => {})
-    }, 800)
+    let startupTimer: NodeJS.Timeout | undefined
     const progress = (message: string) => {
       startupMessage = message
       if (showStartupMessage && this.operation === operation && this.state === "starting" && !operation.signal.aborted)
         void this.view.update({ status: message, busy: true }).catch(() => {})
     }
     try {
+      const modelReady = await this.engine.downloads.ready(model)
+      operation.signal.throwIfAborted()
+      if (!modelReady) {
+        this.operation = undefined
+        this.hotkeyActivation = ""
+        this.state = "idle"
+        await this.api.ShowToastMsg(this.ctx, { Message: "Error: Download a speech model first: dictate model" })
+        return
+      }
+      startupTimer = setTimeout(() => {
+        if (this.operation !== operation || this.state !== "starting" || operation.signal.aborted) return
+        showStartupMessage = true
+        void this.view.update({ status: startupMessage, busy: true }).catch(() => {})
+      }, 800)
       const capturing = (async () => {
         if (captureAfterHide) {
           await this.api.HideApp(this.ctx)
@@ -196,7 +206,6 @@ export class Controller {
       })
       // Attach a handler immediately while audio startup runs independently.
       void presentation.catch(() => {})
-      if (!(await this.engine.downloads.ready(model))) throw new Error("Download a speech model first: dictate model")
       this.timing(trace, "model_check_complete", `warmupPending=${!!this.warmupTask}`)
       operation.signal.throwIfAborted()
       await this.warmupTask
@@ -317,7 +326,7 @@ export class Controller {
         } catch (error) {
           if (trace) this.timing(trace, "ai_refine_failed", `aborted=${operation.signal.aborted}`)
           operation.signal.throwIfAborted()
-          await this.api.Notify(this.ctx, `AI refinement failed; keeping the transcript. ${String(error)}`)
+          await this.api.ShowToastMsg(this.ctx, { Message: `AI refinement failed; keeping the transcript. ${String(error)}` })
         }
       }
       if (action.type === "custom" && action.prompt.trim()) {
@@ -393,7 +402,7 @@ export class Controller {
           const key = permission ? "plugin_dictation_insert_accessibility" : "plugin_dictation_insert_fallback"
           const fallback = permission ? "Copied to clipboard. Allow Accessibility access for Wox and its Node.js runtime in System Settings, then try again." : "Could not insert automatically. Copied to clipboard."
           const message = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
-          await this.api.Notify(this.ctx, message && (!permission || message !== key) ? message : fallback)
+          await this.api.ShowToastMsg(this.ctx, { Message: message && (!permission || message !== key) ? message : fallback })
         }
         return
       }
@@ -455,7 +464,7 @@ export class Controller {
     }
     if (microphone && !this.text) await this.view.close().catch(() => {})
     else await this.view.update({ status: message, text: this.text, result: !!this.text }).catch(() => {})
-    await this.api.Notify(this.ctx, message)
+    await this.api.ShowToastMsg(this.ctx, { Message: message })
   }
   async cancel(restoreFocus = false): Promise<void> {
     if (this.cancelTask) return this.cancelTask

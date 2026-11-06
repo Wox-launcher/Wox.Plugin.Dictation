@@ -212,7 +212,7 @@ export class DictationWindow {
         if (generation !== this.generation) return
         if (event.Type === "error") {
           void this.onCommand("cancel").catch(() => {})
-          await this.api.Notify(this.ctx, event.ErrMsg || "Dictation window failed")
+          await this.api.ShowToastMsg(this.ctx, { Message: event.ErrMsg || "Dictation window failed" })
         }
         if (event.Type === "closed") {
           this.visible = false
