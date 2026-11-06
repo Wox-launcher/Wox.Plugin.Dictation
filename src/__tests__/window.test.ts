@@ -1,14 +1,15 @@
-import type { Context, CreateWindowOption, PluginWindow, PublicAPI } from "@wox-launcher/wox-plugin"
+import type { Context, CreateWindowOption, PluginWindow, PublicAPI, WindowContentUpdateOption, WindowEvent } from "@wox-launcher/wox-plugin"
 import { DictationWindow } from "../window"
 
 const ctx = {} as Context
 function setup() {
   let option!: CreateWindowOption
-  const update = jest.fn<Promise<{ Success: boolean; ErrMsg: string }>, [Context, { Data: string; Sequence: number }]>(async () => ({ Success: true, ErrMsg: "" }))
+  const update = jest.fn<Promise<{ Success: boolean; ErrMsg: string }>, [Context, WindowContentUpdateOption]>(async () => ({ Success: true, ErrMsg: "" }))
   const window = {
     ID: "window-1", Show: jest.fn(async () => ({ Success: true })), Hide: jest.fn(async () => ({ Success: true })),
-    Close: jest.fn(async () => ({ Success: true })), SetOptions: jest.fn(async () => ({ Success: true })), Content: { Update: update }
-  } as unknown as PluginWindow
+    Close: jest.fn(async () => ({ Success: true })), SetOptions: jest.fn(async () => ({ Success: true })),
+    Content: { Update: update, Set: jest.fn(async () => ({ Success: true })), Command: jest.fn(async () => ({ Success: true })) }
+  } satisfies PluginWindow
   const api = {
     CreateWindow: jest.fn(async (_ctx, value: CreateWindowOption) => { option = value; return { Success: true, Window: window } }),
     GetThemeColors: jest.fn(async () => ({ Background: "#202832", Text: "#e8f0ff", SecondaryText: "#aab8c8", Border: "#333333", Accent: "#4488ff", AccentText: "#ffffff", Selection: "#555555", Dark: true }))
@@ -86,7 +87,7 @@ test("waveform moves in silence and responds to speech; close appears on hover",
   expect(heights()).not.toEqual(quiet)
   await view.update({ status: "Listening", recording: true, level: 1 })
   expect(Math.max(...heights())).toBeGreaterThan(Math.max(...quiet) + 5)
-  await option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [true] } })
+  await option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [true] } })
   expect(frame().find(n => n.key === "cancel")?.props).toMatchObject({ disabled: true, style: { opacity: 0 } })
   expect(frame().find(n => n.key === "close-shape")?.props?.progress).toBe(1)
   const closeShape = frame().find(n => n.key === "close-shape")!.props!
@@ -98,7 +99,7 @@ test("waveform moves in silence and responds to speech; close appears on hover",
   expect(frame().find(n => n.key === "cancel")?.props).toMatchObject({ disabled: true, style: { opacity: 0 } })
   await new Promise(resolve => setTimeout(resolve, 230))
   expect(frame().find(n => n.key === "cancel")?.props).toMatchObject({ disabled: false, onPress: { $handler: "cancel" }, style: { opacity: 1 } })
-  await option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [false] } })
+  await option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [false] } })
   await new Promise(resolve => setTimeout(resolve, 200))
   expect(frame().find(n => n.key === "cancel")?.props).toMatchObject({ disabled: true, style: { opacity: 0 } })
   expect(frame().find(n => n.key === "close-shape")?.props).toMatchObject({ progress: 0, duration: 260 })
@@ -111,10 +112,10 @@ test("theme changes recolor the whole shape, and a quick hover exit cancels sepa
   await view.show()
   await new Promise(resolve => setTimeout(resolve, 330))
   const frame = () => tree(update.mock.lastCall![1].Data)
-  await option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [true] } })
-  await option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [false] } })
+  await option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [true] } })
+  await option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [false] } })
   jest.mocked(api.GetThemeColors).mockResolvedValueOnce({ Background: "#f0e6da", Text: "#302010", SecondaryText: "#604830", Border: "#333333", Accent: "#4488ff", AccentText: "#ffffff", Selection: "#aaaaaa", Dark: false })
-  await option().OnEvent!(ctx, { Type: "theme_changed" as never, WindowID: window.ID, Data: { Dark: false } })
+  await option().OnEvent!(ctx, { Type: "theme_changed", WindowID: window.ID, Data: { Dark: false } })
   expect(frame().find(n => n.key === "panel")?.props?.style?.backgroundColor).toBe("#f0e6da")
   expect(frame().find(n => n.key === "close-shape")?.props?.style?.color).toBe("#f0e6da")
   expect(frame().find(n => n.key === "cancel")?.props?.style).toMatchObject({ backgroundColor: "#00000000", color: "#302010", opacity: 0 })
@@ -126,7 +127,7 @@ test("theme changes recolor the whole shape, and a quick hover exit cancels sepa
 test("hover during the opening animation waits until the capsule is visible", async () => {
   const { view, update, option, window } = setup()
   await view.show()
-  const event = { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [true] } }
+  const event: WindowEvent = { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [true] } }
   await option().OnEvent!(ctx, event)
   expect(tree(update.mock.lastCall![1].Data).some(n => n.key === "close-shape")).toBe(false)
   await new Promise(resolve => setTimeout(resolve, 340))
@@ -139,7 +140,7 @@ test("reversing hover during the pinch cancels the previous snap", async () => {
   try {
     const { view, update, option, window } = setup()
     const frame = () => tree(update.mock.lastCall![1].Data)
-    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
+    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
     await view.show()
     await jest.advanceTimersByTimeAsync(330)
     await hover(true)
@@ -165,7 +166,7 @@ test("returning during merge cancels absorption", async () => {
   try {
     const { view, update, option, window } = setup()
     const frame = () => tree(update.mock.lastCall![1].Data)
-    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
+    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
     await view.show()
     await jest.advanceTimersByTimeAsync(330)
     await hover(true)
@@ -188,7 +189,7 @@ test("crossing the gap to the close button keeps it visible", async () => {
   try {
     const { view, update, option, window } = setup()
     const frame = () => tree(update.mock.lastCall![1].Data)
-    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
+    const hover = (value: boolean) => option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: "hover", Args: [value] } })
     await view.show()
     await jest.advanceTimersByTimeAsync(330)
     await hover(true)
@@ -211,7 +212,7 @@ test("dispatches WoxView commands without waiting for a slow stop", async () => 
   const commands: string[] = []
   view.onCommand = async command => { commands.push(command); if (command === "stop") await new Promise<void>(resolve => { finish = resolve }) }
   await view.show()
-  const event = (handler: string) => option().OnEvent!(ctx, { Type: "woxview_event" as never, WindowID: window.ID, Data: { Handler: handler, Args: [] } })
+  const event = (handler: string) => option().OnEvent!(ctx, { Type: "woxview_event", WindowID: window.ID, Data: { Handler: handler, Args: [] } })
   await event("stop")
   await event("cancel")
   await event("copy")

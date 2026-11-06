@@ -1,4 +1,4 @@
-import type { Context, CreateWindowOption, PluginWindow, PublicAPI } from "@wox-launcher/wox-plugin"
+import type { Context, PluginWindow, PublicAPI, WoxViewEventData, WoxViewMorphPathProps, WoxViewNode, WoxViewTree } from "@wox-launcher/wox-plugin"
 
 export interface ViewState {
   status: string
@@ -10,9 +10,6 @@ export interface ViewState {
   result?: boolean
 }
 
-// The published SDK still describes the old HTML window API.
-type WoxViewWindow = Omit<PluginWindow, "Content"> & { Content: { Update(ctx: Context, option: { Data: string; Sequence: number }): Promise<{ Success: boolean; ErrMsg?: string }> } }
-
 const animationDuration = 220
 const compactWidth = 164
 const compactHeight = 40
@@ -20,23 +17,23 @@ const windowWidth = 208
 const splitDuration = 400
 const mergeDuration = 260
 const hoverLeaveDelay = 180
-const bridgeFrom = [
+type Path = WoxViewMorphPathProps["keyframes"][number]["path"]
+const bridgeFrom: Path = [
   { op: "M", values: [0, 0] }, { op: "C", values: [.23, 0, .417, .224, .417, .5] }, { op: "C", values: [.417, .5, .625, .5, .625, .5] },
   { op: "L", values: [.625, .5] }, { op: "C", values: [.625, .5, .417, .5, .417, .5] }, { op: "C", values: [.417, .776, .23, 1, 0, 1] }, { op: "Z" }
 ]
-const bridgeTo = [
+const bridgeTo: Path = [
   { op: "M", values: [0, 0] }, { op: "C", values: [.3, 0, .35, .31, .6, .35] }, { op: "C", values: [.66, .35, .66, .1, .958, .1] },
   { op: "L", values: [.958, .9] }, { op: "C", values: [.66, .9, .66, .65, .6, .65] }, { op: "C", values: [.35, .69, .3, 1, 0, 1] }, { op: "Z" }
 ]
-const circleFrom = [
+const circleFrom: Path = [
   { op: "M", values: [.4754, .5] }, { op: "C", values: [.4754, .2791, .5928, .1, .7377, .1] }, { op: "C", values: [.8826, .1, 1, .2791, 1, .5] },
   { op: "C", values: [1, .7209, .8826, .9, .7377, .9] }, { op: "C", values: [.5928, .9, .4754, .7209, .4754, .5] }, { op: "Z" }
 ]
-const circleTo = [
+const circleTo: Path = [
   { op: "M", values: [.344, .5] }, { op: "C", values: [.45, .5, .65, .1, .7377, .1] }, { op: "C", values: [.8826, .1, 1, .2791, 1, .5] },
   { op: "C", values: [1, .7209, .8826, .9, .7377, .9] }, { op: "C", values: [.65, .9, .45, .5, .344, .5] }, { op: "Z" }
 ]
-type Path = typeof bridgeFrom
 // The paths share one coordinate space and one timeline, including the connecting neck.
 function pathInShape(path: Path, width: number, offset: number): Path {
   return path.map(command => ({ ...command, values: command.values?.map((value, i) => i % 2 === 0 ? (offset + width * value) / 62 : value) }))
@@ -67,12 +64,12 @@ const defaultColors: WindowColors = { background: "#191c22", text: "#f5f7fa", se
 function content(state: ViewState, open: boolean, shapesReady: boolean, hovered: boolean, iconVisible: boolean, phase: number, colors: WindowColors): string {
   const listening = state.recording || state.starting
   const level = Number.isFinite(state.level) ? Math.max(0, Math.min(1, state.level!)) : 0
-  const bars = Array.from({ length: 13 }, (_, i) => {
+  const bars: WoxViewNode[] = Array.from({ length: 13 }, (_, i) => {
     const envelope = .4 + .6 * Math.sin(Math.PI * (i + 1) / 14)
     const motion = .35 + .65 * (1 + Math.sin(phase * .55 - i * .72)) / 2
     return { type: "view", key: `bar-${i}`, props: { transition: { properties: ["height"], duration: 100, curve: "easeInOut" }, animation: { type: "pulse", duration: 850 + i * 73 }, style: { width: 3, height: 3 + envelope * motion * (2 + level * 17), borderRadius: 3, backgroundColor: colors.text } } }
   })
-  const body = state.result
+  const body: WoxViewNode = state.result
     ? { type: "column", props: { style: { left: 18, right: 18, top: 18, bottom: 18, gap: 10, alignItems: "stretch" } }, children: [
       { type: "text", props: { text: state.status, style: { color: colors.secondary, fontSize: 14, maxLines: 2, margin: { right: 35 } } } },
       { type: "scroll", key: "result-scroll", props: { style: { flex: 1 } }, children: [{ type: "text", key: "result-text", props: { text: state.text || "", selectable: true, style: { color: colors.text, fontSize: 15 } } }] },
@@ -81,24 +78,24 @@ function content(state: ViewState, open: boolean, shapesReady: boolean, hovered:
     : { type: "column", props: { style: { left: 8, right: listening ? 8 : 30, top: 0, bottom: 0, alignItems: "stretch", justifyContent: "center" } }, children: [
       { type: "row", props: { style: { gap: 8, alignItems: "center", justifyContent: "center" } }, children: listening
         ? [{ type: "row", key: "wave", props: { label: state.starting ? "Preparing microphone" : "Stop dictation", onPress: { $handler: "stop" }, style: { width: 110, padding: { vertical: 8 }, gap: 4, alignItems: "center", justifyContent: "center" } }, children: bars }]
-        : [...(state.busy ? [{ type: "loading", props: { style: { width: 16, height: 16, color: colors.text } } }] : []), { type: "text", props: { text: state.status, style: { color: colors.secondary, fontSize: 12, maxLines: 2, textAlign: "center" } } }] }
+        : [...(state.busy ? [{ type: "loading", props: { style: { width: 16, height: 16, color: colors.text } } } satisfies WoxViewNode] : []), { type: "text", props: { text: state.status, style: { color: colors.secondary, fontSize: 12, maxLines: 2, textAlign: "center" } } }] }
     ] }
   const height = state.result ? 300 : compactHeight
   return JSON.stringify({ version: 1, root: { type: "stack", props: { style: { width: state.result ? 440 : windowWidth, height } }, children: [
-    ...(!state.result && shapesReady ? [{ type: "morph-path", key: "close-shape", props: { keyframes: shapeKeyframes, progress: hovered ? 1 : 0, duration: hovered ? splitDuration : mergeDuration, curve: "linear", style: { left: 144, top: 0, width: 62, height: 40, color: colors.background } } }] : []),
+    ...(!state.result && shapesReady ? [{ type: "morph-path", key: "close-shape", props: { keyframes: shapeKeyframes, progress: hovered ? 1 : 0, duration: hovered ? splitDuration : mergeDuration, curve: "linear", style: { left: 144, top: 0, width: 62, height: 40, color: colors.background } } } satisfies WoxViewNode] : []),
     { type: "stack", key: "panel", props: { onHoverChange: { $handler: "hover" }, transition: { properties: ["scale", "opacity"], duration: animationDuration, curve: "easeInOut" }, style: { left: 0, top: 0, width: state.result ? 440 : compactWidth, height, borderRadius: state.result ? 12 : 20, backgroundColor: colors.background, scale: open ? 1 : .05, opacity: open ? 1 : 0, overflow: "hidden" } }, children: [body,
-      ...(state.result && hovered ? [{ type: "icon-button", key: "cancel-result", props: { icon: "control.close", iconColorMode: "tint", label: state.busy ? "Cancel dictation" : "Close", onPress: { $handler: "cancel" }, enter: { type: "fade", duration: 140 }, exit: { type: "fade", duration: 140 }, style: { right: 8, top: 12, width: 28, height: 28, color: colors.text } } }] : [])
+      ...(state.result && hovered ? [{ type: "icon-button", key: "cancel-result", props: { icon: "control.close", iconColorMode: "tint", label: state.busy ? "Cancel dictation" : "Close", onPress: { $handler: "cancel" }, enter: { type: "fade", duration: 140 }, exit: { type: "fade", duration: 140 }, style: { right: 8, top: 12, width: 28, height: 28, color: colors.text } } } satisfies WoxViewNode] : [])
     ] },
-    ...(!state.result && hovered && shapesReady ? [{ type: "view", key: "hover-gap", props: { inputRegion: true, onHoverChange: { $handler: "hover" }, style: { left: 164, top: 0, width: 10, height: 40 } } }] : []),
+    ...(!state.result && hovered && shapesReady ? [{ type: "view", key: "hover-gap", props: { inputRegion: true, onHoverChange: { $handler: "hover" }, style: { left: 164, top: 0, width: 10, height: 40 } } } satisfies WoxViewNode] : []),
     ...(!state.result && shapesReady ? [{ type: "stack", key: "close-position", props: { transition: { properties: ["width"], duration: hovered ? splitDuration : mergeDuration, curve: "easeInOut" }, style: { left: 0, top: 0, width: hovered ? 206 : 178, height: 40 } }, children: [
       { type: "icon-button", key: "cancel", props: { icon: "control.close", iconColorMode: "tint", label: state.busy ? "Cancel dictation" : "Close", disabled: !hovered || !iconVisible, onPress: { $handler: "cancel" }, onHoverChange: { $handler: "hover" }, transition: { properties: ["opacity"], duration: 100, curve: "easeInOut" }, style: { right: 0, top: 4, width: 32, height: 32, borderRadius: 16, backgroundColor: "#00000000", color: colors.text, opacity: open && hovered && iconVisible ? 1 : 0 } } }
-    ] }] : [])
-  ] } })
+    ] } satisfies WoxViewNode] : [])
+  ] } } satisfies WoxViewTree)
 }
 
 export class DictationWindow {
   private generation = 0
-  private window?: WoxViewWindow
+  private window?: PluginWindow
   private creating?: Promise<void>
   private visibility = 0
   private visible = false
@@ -204,8 +201,7 @@ export class DictationWindow {
   private async create(): Promise<void> {
     const generation = ++this.generation
     await this.refreshColors()
-    const api = this.api as unknown as { CreateWindow(ctx: Context, option: Omit<CreateWindowOption, "Content" | "Window"> & { Window: NonNullable<CreateWindowOption["Window"]> & { Transparent: boolean; PassThroughTransparent?: boolean }; Content: { Type: "woxview"; Data: string } }): Promise<{ Success: boolean; ErrMsg?: string; Window?: WoxViewWindow }> }
-    const result = await api.CreateWindow(this.ctx, {
+    const result = await this.api.CreateWindow(this.ctx, {
       Window: { Title: "Dictation", Presentation: "overlay", Width: windowWidth, Height: compactHeight, Anchor: "bottom-center", OffsetX: (windowWidth - compactWidth) / 2, OffsetY: -60, Topmost: true, Focusable: true, Resizable: false, Movable: true, HideChrome: true, DragContent: true, Closable: true, Transparent: true, PassThroughTransparent: process.platform === "win32" },
       Content: { Type: "woxview", Data: content(this.state, false, false, false, false, this.phase, this.colors) },
       OnEvent: async (_ctx, event) => {
@@ -229,12 +225,12 @@ export class DictationWindow {
           clearTimeout(this.hoverLeaveTimer)
           void this.onCommand("cancel").catch(() => {})
         }
-        if ((event.Type as string) === "theme_changed") {
+        if (event.Type === "theme_changed") {
           await this.refreshColors()
           if (generation === this.generation && this.visible) await this.update(this.state)
         }
-        if ((event.Type as string) === "woxview_event") {
-          const data = event.Data as { Handler?: string; Args?: unknown[] } | undefined
+        if (event.Type === "woxview_event") {
+          const data = event.Data as Partial<WoxViewEventData> | undefined
           if (data?.Handler === "hover" && typeof data.Args?.[0] === "boolean" && this.visible) {
             clearTimeout(this.hoverLeaveTimer)
             if (data.Args[0]) {
@@ -295,7 +291,7 @@ export class DictationWindow {
       await this.posting
     }
   }
-  private async send(window: WoxViewWindow, state: ViewState, open: boolean): Promise<void> {
+  private async send(window: PluginWindow, state: ViewState, open: boolean): Promise<void> {
     const result = await window.Content.Update(this.ctx, { Data: content(state, open, this.shapesReady, this.activeHover, this.iconVisible, this.phase, this.colors), Sequence: ++this.sequence })
     if (!result.Success) throw new Error(result.ErrMsg || "Window update failed")
   }
