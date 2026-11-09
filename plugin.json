@@ -6,7 +6,7 @@
   "Name": "i18n:plugin_dictation_plugin_name",
   "Description": "i18n:plugin_dictation_plugin_description",
   "Author": "Wox Launcher",
-  "Version": "1.1.0",
+  "Version": "1.1.1",
   "MinWoxVersion": "2.5.0",
   "Runtime": "nodejs",
   "Website": "https://github.com/Wox-launcher/Wox.Plugin.Dictation",
