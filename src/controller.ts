@@ -11,6 +11,16 @@ import { TextInsert, type InputTarget } from "./insert"
 
 export type State = "idle" | "starting" | "recording" | "stopping" | "processing"
 const processingIndicatorDelay = 500
+
+// Keep compatibility with hosts and SDK releases from before the permission API.
+type MicrophonePermissionCall = (ctx: Context, option: { Permission: "microphone"; Reason?: string }) => Promise<{
+  Status: "granted" | "notDetermined" | "denied" | "restricted" | "unsupported"
+}>
+type DictationAPI = PublicAPI & {
+  GetOSPermissionStatus?: MicrophonePermissionCall
+  RequestOSPermission?: MicrophonePermissionCall
+}
+
 export class Controller {
   state: State = "idle"
   private operation?: AbortController
@@ -36,7 +46,7 @@ export class Controller {
     void this.api.Log(this.ctx, "Info", `[Dictation timing] session=${trace.id} stage=${stage} atMs=${now} elapsedMs=${now - trace.startedAt}${details ? ` ${details}` : ""}`).catch(() => {})
   }
   constructor(
-    readonly api: PublicAPI,
+    readonly api: DictationAPI,
     readonly ctx: Context,
     readonly store: Store,
     readonly engine: Engine,
@@ -81,7 +91,13 @@ export class Controller {
       operation.signal.throwIfAborted()
       await this.engine.preload(model, this.store.settings.modelLoadMode !== "lazy")
       operation.signal.throwIfAborted()
-      if (this.store.settings.keepMicrophoneReady !== "false") await this.engine.warmMicrophone(this.store.settings.inputDevice || "")
+      if (this.store.settings.keepMicrophoneReady === "false") return
+      if (process.platform === "darwin") {
+        const permission = await this.api.GetOSPermissionStatus?.(this.ctx, { Permission: "microphone" })
+        operation.signal.throwIfAborted()
+        if (permission?.Status !== "granted") return
+      }
+      await this.engine.warmMicrophone(this.store.settings.inputDevice || "")
     })().catch(error => {
       if (!operation.signal.aborted) void this.api.Log(this.ctx, "Warning", `Could not prewarm dictation: ${String(error)}`).catch(() => {})
     }).finally(() => {
@@ -171,6 +187,31 @@ export class Controller {
         this.state = "idle"
         await this.api.ShowToastMsg(this.ctx, { Message: "Error: Download a speech model first: dictate model" })
         return
+      }
+      if (process.platform === "darwin" && this.api.RequestOSPermission) {
+        const { Status: status } = await this.api.RequestOSPermission(this.ctx, {
+          Permission: "microphone",
+          Reason: "i18n:plugin_dictation_microphone_reason"
+        })
+        operation.signal.throwIfAborted()
+        if (status !== "granted" && status !== "unsupported") {
+          let message: string | undefined
+          if (status !== "notDetermined") {
+            const restricted = status === "restricted"
+            const key = restricted ? "plugin_dictation_microphone_restricted" : "plugin_dictation_microphone_denied"
+            const fallback = restricted
+              ? "macOS restricts microphone access for Wox. Check your device restrictions."
+              : "Allow Wox to access the microphone in System Settings → Privacy & Security → Microphone, then try again."
+            const translated = await this.api.GetTranslation(this.ctx, key).catch(() => fallback)
+            operation.signal.throwIfAborted()
+            message = translated && translated !== key ? translated : fallback
+          }
+          this.operation = undefined
+          this.hotkeyActivation = ""
+          this.state = "idle"
+          if (message) await this.api.ShowToastMsg(this.ctx, { Message: message })
+          return
+        }
       }
       startupTimer = setTimeout(() => {
         if (this.operation !== operation || this.state !== "starting" || operation.signal.aborted) return

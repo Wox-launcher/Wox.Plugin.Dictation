@@ -40,6 +40,9 @@
   ],
   "I18n": {
     "en_US": {
+      "plugin_dictation_microphone_reason": "Dictation uses your microphone to turn speech into text on this device.",
+      "plugin_dictation_microphone_denied": "Allow Wox to access the microphone in System Settings → Privacy & Security → Microphone, then try again.",
+      "plugin_dictation_microphone_restricted": "macOS restricts microphone access for Wox. Check your device restrictions.",
       "plugin_dictation_microphone_unavailable": "Microphone unavailable. Check its connection and Dictation input device, then try again.",
       "plugin_dictation_audio_init_failed": "Could not initialize audio. Please try again; if the problem continues, restart Wox.",
       "plugin_dictation_plugin_name": "Dictation",
@@ -165,6 +168,9 @@
       "plugin_dictation_action_output_clipboard": "Clipboard"
     },
     "ja_JP": {
+      "plugin_dictation_microphone_reason": "音声入力では、マイクで拾った声をこのデバイス上で文字に変換します。",
+      "plugin_dictation_microphone_denied": "「システム設定」→「プライバシーとセキュリティ」→「マイク」で Wox にアクセスを許可し、もう一度お試しください。",
+      "plugin_dictation_microphone_restricted": "macOS が Wox のマイクへのアクセスを制限しています。デバイスの制限を確認してください。",
       "plugin_dictation_microphone_unavailable": "マイクを使用できません。接続と音声入力の設定を確認してから、もう一度お試しください。",
       "plugin_dictation_audio_init_failed": "音声を初期化できませんでした。再試行しても解決しない場合は、Woxを再起動してください。",
       "plugin_dictation_plugin_name": "ディクテーション",
@@ -289,6 +295,9 @@
       "plugin_dictation_action_output_clipboard": "クリップボード"
     },
     "ko_KR": {
+      "plugin_dictation_microphone_reason": "받아쓰기는 마이크를 사용해 이 기기에서 음성을 텍스트로 변환합니다.",
+      "plugin_dictation_microphone_denied": "시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Wox의 접근을 허용한 후 다시 시도하세요.",
+      "plugin_dictation_microphone_restricted": "macOS가 Wox의 마이크 접근을 제한하고 있습니다. 기기의 제한 설정을 확인하세요.",
       "plugin_dictation_microphone_unavailable": "마이크를 사용할 수 없습니다. 연결과 받아쓰기 입력 장치를 확인한 후 다시 시도하세요.",
       "plugin_dictation_audio_init_failed": "오디오를 초기화할 수 없습니다. 다시 시도하고 문제가 계속되면 Wox를 다시 시작하세요.",
       "plugin_dictation_plugin_name": "받아쓰기",
@@ -413,6 +422,9 @@
       "plugin_dictation_action_output_clipboard": "클립보드"
     },
     "pt_BR": {
+      "plugin_dictation_microphone_reason": "O Ditado usa o microfone para converter sua fala em texto neste dispositivo.",
+      "plugin_dictation_microphone_denied": "Permita que o Wox acesse o microfone em Ajustes do Sistema → Privacidade e Segurança → Microfone e tente novamente.",
+      "plugin_dictation_microphone_restricted": "O macOS restringe o acesso do Wox ao microfone. Verifique as restrições do dispositivo.",
       "plugin_dictation_microphone_unavailable": "Microfone indisponível. Verifique a conexão e o dispositivo de entrada do ditado e tente novamente.",
       "plugin_dictation_audio_init_failed": "Não foi possível inicializar o áudio. Tente novamente; se o problema persistir, reinicie o Wox.",
       "plugin_dictation_loading_model": "Preparing dictation engine and recognition model...\nLoad time depends on your device performance. If it takes too long, try a smaller model.",
@@ -504,6 +516,9 @@
       "plugin_dictation_hotkey": "Atalho"
     },
     "ru_RU": {
+      "plugin_dictation_microphone_reason": "Диктовка использует микрофон, чтобы преобразовывать речь в текст на этом устройстве.",
+      "plugin_dictation_microphone_denied": "Разрешите Wox доступ к микрофону в разделе «Системные настройки → Конфиденциальность и безопасность → Микрофон» и повторите попытку.",
+      "plugin_dictation_microphone_restricted": "macOS ограничивает доступ Wox к микрофону. Проверьте ограничения устройства.",
       "plugin_dictation_microphone_unavailable": "Микрофон недоступен. Проверьте подключение и выбранное устройство ввода, затем повторите попытку.",
       "plugin_dictation_audio_init_failed": "Не удалось инициализировать аудио. Повторите попытку; если ошибка не исчезнет, перезапустите Wox.",
       "plugin_dictation_loading_model": "Preparing dictation engine and recognition model...\nLoad time depends on your device performance. If it takes too long, try a smaller model.",
@@ -595,6 +610,9 @@
       "plugin_dictation_hotkey": "Горячая клавиша"
     },
     "zh_CN": {
+      "plugin_dictation_microphone_reason": "听写需要使用麦克风，将你说的话在本机转换成文字。",
+      "plugin_dictation_microphone_denied": "请在「系统设置 → 隐私与安全性 → 麦克风」中允许 Wox 访问麦克风，然后重试。",
+      "plugin_dictation_microphone_restricted": "macOS 限制了 Wox 的麦克风访问，请检查设备的限制设置。",
       "plugin_dictation_microphone_unavailable": "麦克风暂不可用，请检查连接和听写输入设备后重试。",
       "plugin_dictation_audio_init_failed": "音频初始化失败，请重试；如果问题持续出现，请重启 Wox。",
       "plugin_dictation_plugin_name": "听写",

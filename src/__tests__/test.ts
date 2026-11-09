@@ -180,7 +180,52 @@ function setupController() {
   return { controller, engine, view, store, api }
 }
 
+function mockMacOS() {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!
+  Object.defineProperty(process, "platform", { ...original, value: "darwin" })
+  return () => Object.defineProperty(process, "platform", original)
+}
+
 describe("session lifecycle", () => {
+  test.each(["denied", "notDetermined"] as const)("%s microphone access stops macOS dictation before opening the recording window", async status => {
+    const restorePlatform = mockMacOS()
+    const { controller, engine, view, api } = setupController()
+    const request = jest.fn(async () => ({ Status: status }))
+    controller.api.RequestOSPermission = request
+    try {
+      await controller.start({ ...defaultAction, output: "clipboard" })
+      expect(request).toHaveBeenCalledWith(ctx, { Permission: "microphone", Reason: "i18n:plugin_dictation_microphone_reason" })
+      expect(engine.start).not.toHaveBeenCalled()
+      expect(view.show).not.toHaveBeenCalled()
+      if (status === "denied") {
+        expect(api.ShowToastMsg).toHaveBeenCalledWith(ctx, { Message: expect.stringContaining("System Settings") })
+      } else {
+        expect(api.ShowToastMsg).not.toHaveBeenCalled()
+      }
+      expect(controller.state).toBe("idle")
+    } finally {
+      restorePlatform()
+    }
+  })
+  test("granting microphone access after hotkey release does not start a cancelled recording", async () => {
+    const restorePlatform = mockMacOS()
+    const { controller, engine, api } = setupController()
+    let grant!: () => void
+    controller.api.RequestOSPermission = () => new Promise(resolve => { grant = () => resolve({ Status: "granted" }) })
+    try {
+      const starting = controller.start({ ...defaultAction, output: "clipboard" })
+      await new Promise(resolve => setImmediate(resolve))
+      expect(grant).toBeDefined()
+      await controller.stop()
+      grant()
+      await starting
+      expect(engine.start).not.toHaveBeenCalled()
+      expect(api.ShowToastMsg).not.toHaveBeenCalled()
+      expect(controller.state).toBe("idle")
+    } finally {
+      restorePlatform()
+    }
+  })
   test("a missing model shows only a toast without opening the dictation window", async () => {
     const { controller, engine, view, api } = setupController()
     jest.mocked(engine.downloads.ready).mockResolvedValue(false)
@@ -414,6 +459,28 @@ describe("session lifecycle", () => {
     expect(engine.start).toHaveBeenCalledTimes(1)
     await controller.cancel()
     exists.mockRestore()
+  })
+  test("model warmup checks macOS microphone permission without requesting access", async () => {
+    const restorePlatform = mockMacOS()
+    const exists = jest.spyOn(downloads, "exists").mockResolvedValue(true)
+    const { controller, engine } = setupController()
+    Object.assign(engine.downloads, { runtimePath: () => "/runtime", modelPath: () => "/model" })
+    Object.assign(engine, { preload: jest.fn(async () => {}) })
+    const check = jest.fn(async () => ({ Status: "notDetermined" as const }))
+    const request = jest.fn(async () => ({ Status: "granted" as const }))
+    controller.api.GetOSPermissionStatus = check
+    controller.api.RequestOSPermission = request
+    try {
+      controller.warmup()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(engine.preload).toHaveBeenCalled()
+      expect(check).toHaveBeenCalledWith(ctx, { Permission: "microphone" })
+      expect(request).not.toHaveBeenCalled()
+      expect(engine.warmMicrophone).not.toHaveBeenCalled()
+    } finally {
+      exists.mockRestore()
+      restorePlatform()
+    }
   })
   test("a background model download does not block the dictation hotkey", async () => {
     const { controller, engine, store } = setupController()
