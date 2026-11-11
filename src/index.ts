@@ -229,7 +229,11 @@ export const plugin: Plugin = {
     visibleModel = undefined
     if (query.Type === "selection") {
       if (query.Selection?.Type !== "text" || !query.Selection.Text?.trim()) return { Results: [] }
-      return { Results: store.actions.filter(a => !a.disabled).map(a => actionResult(ctx, a, query.Selection.Text, query.Env?.ActiveWindowPid)) }
+      return {
+        Results: store.actions
+          .filter(action => action.type === "custom" && !action.disabled)
+          .map(action => actionResult(ctx, action, query.Selection.Text, query.Env?.ActiveWindowPid))
+      }
     }
     const search = [query.Command, query.Search].filter(Boolean).join(" ").trim()
     if (search === "model") {
